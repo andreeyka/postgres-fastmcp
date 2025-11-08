@@ -1,0 +1,605 @@
+"""Module for creating and registering MCP tools."""
+
+from __future__ import annotations
+
+import types
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast
+
+from pydantic import Field, validate_call
+
+from postgres_mcp.artifacts import ErrorResult, ExplainPlanArtifact
+from postgres_mcp.database_health import DatabaseHealthTool
+from postgres_mcp.explain import ExplainPlanTool
+from postgres_mcp.index.dta_calc import DatabaseTuningAdvisor
+from postgres_mcp.index.index_opt_base import MAX_NUM_INDEX_TUNING_QUERIES
+from postgres_mcp.index.llm_opt import LLMOptimizerTool
+from postgres_mcp.index.presentation import TextPresentation
+from postgres_mcp.logger import get_logger
+from postgres_mcp.mcp_types import AccessMode
+from postgres_mcp.sql import DbConnPool, SafeSqlDriver, SqlDriver, check_hypopg_installation_status
+from postgres_mcp.top_queries import TopQueriesCalc
+
+from .constants import (
+    ERROR_CANNOT_USE_ANALYZE_WITH_HYPOTHETICAL,
+    ERROR_DB_NOT_INITIALIZED,
+    ERROR_DB_URL_NOT_SET,
+    ERROR_EMPTY_QUERIES,
+    ERROR_INVALID_SORT_CRITERIA,
+    ERROR_NO_RESULTS,
+    ERROR_PREFIX,
+    ERROR_PROCESSING_EXPLAIN_PLAN,
+    ERROR_UNSUPPORTED_OBJECT_TYPE,
+    HEALTH_TYPE_VALUES,
+    LOG_CREATED_TOOLS,
+    LOG_ERROR_ANALYZING_QUERIES,
+    LOG_ERROR_ANALYZING_WORKLOAD,
+    LOG_ERROR_EXECUTING_QUERY,
+    LOG_ERROR_EXPLAINING_QUERY,
+    LOG_ERROR_GETTING_OBJECT_DETAILS,
+    LOG_ERROR_GETTING_SLOW_QUERIES,
+    LOG_ERROR_LISTING_OBJECTS,
+    LOG_ERROR_LISTING_SCHEMAS,
+    LOG_SAFE_SQL_DRIVER,
+    LOG_UNRESTRICTED_SQL_DRIVER,
+    QUERIES_LIMIT_MESSAGE,
+)
+from .descriptions import (
+    DESC_ANALYZE_DB_HEALTH,
+    DESC_ANALYZE_QUERY_INDEXES,
+    DESC_ANALYZE_WORKLOAD_INDEXES,
+    DESC_EXECUTE_SQL_RESTRICTED,
+    DESC_EXECUTE_SQL_UNRESTRICTED,
+    DESC_EXPLAIN_QUERY,
+    DESC_GET_OBJECT_DETAILS,
+    DESC_GET_TOP_QUERIES,
+    DESC_HYPOTHETICAL_INDEXES,
+    DESC_LIST_OBJECTS,
+    DESC_LIST_SCHEMAS,
+)
+from .queries import (
+    QUERY_GET_COLUMNS,
+    QUERY_GET_CONSTRAINTS,
+    QUERY_GET_EXTENSION_DETAILS,
+    QUERY_GET_INDEXES,
+    QUERY_GET_SEQUENCE_DETAILS,
+    QUERY_LIST_EXTENSIONS,
+    QUERY_LIST_SCHEMAS,
+    QUERY_LIST_SEQUENCES,
+    QUERY_LIST_TABLES_VIEWS,
+)
+
+
+if TYPE_CHECKING:
+    from fastmcp import FastMCP
+
+    from postgres_mcp.config import DatabaseConfig
+
+
+logger = get_logger(__name__)
+
+# Type for MCP responses (FastMCP automatically converts these to MCP format)
+ResponseType = str | dict[str, Any] | list[Any]
+
+
+class Tools:
+    """Class for creating and managing MCP tools.
+
+    Encapsulates all tools for working with PostgreSQL through the MCP protocol.
+    """
+
+    # Base mapping of tool method names to their configuration
+    # Each tool has description and enabled flag
+    _TOOLS_BASE: ClassVar[dict[str, dict[str, Any]]] = {
+        "list_schemas": {"description": DESC_LIST_SCHEMAS, "enabled": True},
+        "list_objects": {"description": DESC_LIST_OBJECTS, "enabled": True},
+        "get_object_details": {"description": DESC_GET_OBJECT_DETAILS, "enabled": True},
+        "explain_query": {"description": DESC_EXPLAIN_QUERY, "enabled": True},
+        "analyze_workload_indexes": {"description": DESC_ANALYZE_WORKLOAD_INDEXES, "enabled": True},
+        "analyze_query_indexes": {"description": DESC_ANALYZE_QUERY_INDEXES, "enabled": True},
+        "analyze_db_health": {"description": DESC_ANALYZE_DB_HEALTH, "enabled": True},
+        "get_top_queries": {"description": DESC_GET_TOP_QUERIES, "enabled": True},
+    }
+
+    def __init__(
+        self,
+        config: DatabaseConfig,
+    ) -> None:
+        """Initialize the Tools class.
+
+        Args:
+            config: Database configuration.
+        """
+        self.config = config
+        self.access_mode = config.access_mode
+        # Create database connection pool from config
+        self.db_connection = DbConnPool(
+            connection_url=config.database_uri.get_secret_value(),
+            min_size=config.pool_min_size,
+            max_size=config.pool_max_size,
+        )
+        # Build tools mapping with dynamic description for execute_sql
+        self._tools = {
+            **self._TOOLS_BASE,
+            "execute_sql": {
+                "description": (
+                    DESC_EXECUTE_SQL_UNRESTRICTED
+                    if self.access_mode == AccessMode.UNRESTRICTED
+                    else DESC_EXECUTE_SQL_RESTRICTED
+                ),
+                "enabled": True,
+            },
+        }
+        # Lazy-loaded SQL driver (created on first access)
+        self._sql_driver: SqlDriver | SafeSqlDriver | None = None
+
+    async def __aenter__(self) -> Self:
+        """Async context manager entry.
+
+        Returns:
+            Self instance for use in async with statement.
+        """
+        logger.debug("Entering Tools context manager")
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
+    ) -> None:
+        """Async context manager exit.
+
+        Closes database connection pool on exit.
+
+        Args:
+            exc_type: Exception type if an exception occurred.
+            exc_val: Exception value if an exception occurred.
+            exc_tb: Exception traceback if an exception occurred.
+        """
+        logger.debug("Exiting Tools context manager, closing database connections")
+        if self.db_connection:
+            try:
+                await self.db_connection.close()
+                logger.debug("Database connection pool closed successfully")
+            except Exception as e:
+                logger.error("Error closing database connection pool: %s", e)
+
+    @property
+    def sql_driver(self) -> SqlDriver | SafeSqlDriver:
+        """Get the appropriate SQL driver based on the current access mode.
+
+        Uses lazy loading - creates driver on first access and reuses the same instance.
+        Connection to database pool will be established automatically on first query execution.
+
+        Returns:
+            SqlDriver or SafeSqlDriver depending on the access mode.
+
+        Raises:
+            ValueError: If database connection is not available.
+        """
+        # Return cached driver if it exists
+        if self._sql_driver is not None:
+            return self._sql_driver
+
+        # Driver doesn't exist - create new one
+        if self.db_connection is None:
+            logger.error(ERROR_DB_NOT_INITIALIZED)
+            raise ValueError(ERROR_DB_NOT_INITIALIZED)
+
+        if not self.db_connection.connection_url:
+            logger.error(ERROR_DB_URL_NOT_SET)
+            raise ValueError(ERROR_DB_URL_NOT_SET)
+
+        base_driver = SqlDriver(conn=self.db_connection)
+
+        if self.access_mode == AccessMode.RESTRICTED:
+            timeout = self.config.safe_sql_timeout
+            logger.debug(LOG_SAFE_SQL_DRIVER.format(timeout))
+            self._sql_driver = SafeSqlDriver(sql_driver=base_driver, timeout=timeout)
+        else:
+            logger.debug(LOG_UNRESTRICTED_SQL_DRIVER)
+            self._sql_driver = base_driver
+
+        return self._sql_driver
+
+    def _format_error_response(self, error: str) -> ResponseType:
+        """Format an error response.
+
+        Args:
+            error: Error message.
+
+        Returns:
+            Formatted error response with prefix.
+        """
+        return ERROR_PREFIX + error
+
+    async def list_schemas(self) -> ResponseType:
+        """List all schemas in the database."""
+        try:
+            sql_driver = self.sql_driver
+            rows = await sql_driver.execute_query(QUERY_LIST_SCHEMAS)
+            schemas = [row.cells for row in rows] if rows else []
+        except Exception as e:
+            logger.error(LOG_ERROR_LISTING_SCHEMAS.format(str(e)))
+            return self._format_error_response(str(e))
+        else:
+            return schemas
+
+    async def list_objects(
+        self,
+        schema_name: str = Field(description="Schema name"),
+        object_type: str = Field(
+            description="Object type: 'table', 'view', 'sequence', or 'extension'", default="table"
+        ),
+    ) -> ResponseType:
+        """List objects of a given type in a schema."""
+        try:
+            sql_driver = self.sql_driver
+
+            if object_type in ("table", "view"):
+                table_type = "BASE TABLE" if object_type == "table" else "VIEW"
+                rows = await SafeSqlDriver.execute_param_query(
+                    sql_driver,
+                    QUERY_LIST_TABLES_VIEWS,
+                    [schema_name, table_type],
+                )
+                objects = (
+                    [
+                        {
+                            "schema": row.cells["table_schema"],
+                            "name": row.cells["table_name"],
+                            "type": row.cells["table_type"],
+                        }
+                        for row in rows
+                    ]
+                    if rows
+                    else []
+                )
+
+            elif object_type == "sequence":
+                rows = await SafeSqlDriver.execute_param_query(
+                    sql_driver,
+                    QUERY_LIST_SEQUENCES,
+                    [schema_name],
+                )
+                objects = (
+                    [
+                        {
+                            "schema": row.cells["sequence_schema"],
+                            "name": row.cells["sequence_name"],
+                            "data_type": row.cells["data_type"],
+                        }
+                        for row in rows
+                    ]
+                    if rows
+                    else []
+                )
+
+            elif object_type == "extension":
+                # Extensions are not schema-specific
+                rows = await sql_driver.execute_query(QUERY_LIST_EXTENSIONS)
+                objects = (
+                    [
+                        {
+                            "name": row.cells["extname"],
+                            "version": row.cells["extversion"],
+                            "relocatable": row.cells["extrelocatable"],
+                        }
+                        for row in rows
+                    ]
+                    if rows
+                    else []
+                )
+
+            else:
+                return self._format_error_response(ERROR_UNSUPPORTED_OBJECT_TYPE.format(object_type))
+
+        except Exception as e:
+            logger.error(LOG_ERROR_LISTING_OBJECTS.format(str(e)))
+            return self._format_error_response(str(e))
+        else:
+            return objects
+
+    async def get_object_details(  # noqa: C901
+        self,
+        schema_name: str = Field(description="Schema name"),
+        object_name: str = Field(description="Object name"),
+        object_type: str = Field(
+            description="Object type: 'table', 'view', 'sequence', or 'extension'", default="table"
+        ),
+    ) -> ResponseType:
+        """Get detailed information about a database object."""
+        try:
+            sql_driver = self.sql_driver
+
+            if object_type in ("table", "view"):
+                # Get columns
+                col_rows = await SafeSqlDriver.execute_param_query(
+                    sql_driver,
+                    QUERY_GET_COLUMNS,
+                    [schema_name, object_name],
+                )
+                columns = (
+                    [
+                        {
+                            "column": r.cells["column_name"],
+                            "data_type": r.cells["data_type"],
+                            "is_nullable": r.cells["is_nullable"],
+                            "default": r.cells["column_default"],
+                        }
+                        for r in col_rows
+                    ]
+                    if col_rows
+                    else []
+                )
+
+                # Get constraints
+                con_rows = await SafeSqlDriver.execute_param_query(
+                    sql_driver,
+                    QUERY_GET_CONSTRAINTS,
+                    [schema_name, object_name],
+                )
+
+                constraints = {}
+                if con_rows:
+                    for row in con_rows:
+                        cname = row.cells["constraint_name"]
+                        ctype = row.cells["constraint_type"]
+                        col = row.cells["column_name"]
+
+                        if cname not in constraints:
+                            constraints[cname] = {"type": ctype, "columns": []}
+                        if col:
+                            constraints[cname]["columns"].append(col)
+
+                constraints_list = [{"name": name, **data} for name, data in constraints.items()]
+
+                # Get indexes
+                idx_rows = await SafeSqlDriver.execute_param_query(
+                    sql_driver,
+                    QUERY_GET_INDEXES,
+                    [schema_name, object_name],
+                )
+
+                indexes = (
+                    [{"name": r.cells["indexname"], "definition": r.cells["indexdef"]} for r in idx_rows]
+                    if idx_rows
+                    else []
+                )
+
+                result = {
+                    "basic": {"schema": schema_name, "name": object_name, "type": object_type},
+                    "columns": columns,
+                    "constraints": constraints_list,
+                    "indexes": indexes,
+                }
+
+            elif object_type == "sequence":
+                rows = await SafeSqlDriver.execute_param_query(
+                    sql_driver,
+                    QUERY_GET_SEQUENCE_DETAILS,
+                    [schema_name, object_name],
+                )
+
+                if rows and rows[0]:
+                    row = rows[0]
+                    result = {
+                        "schema": row.cells["sequence_schema"],
+                        "name": row.cells["sequence_name"],
+                        "data_type": row.cells["data_type"],
+                        "start_value": row.cells["start_value"],
+                        "increment": row.cells["increment"],
+                    }
+                else:
+                    result = {}
+
+            elif object_type == "extension":
+                rows = await SafeSqlDriver.execute_param_query(
+                    sql_driver,
+                    QUERY_GET_EXTENSION_DETAILS,
+                    [object_name],
+                )
+
+                if rows and rows[0]:
+                    row = rows[0]
+                    result = {
+                        "name": row.cells["extname"],
+                        "version": row.cells["extversion"],
+                        "relocatable": row.cells["extrelocatable"],
+                    }
+                else:
+                    result = {}
+
+            else:
+                return self._format_error_response(ERROR_UNSUPPORTED_OBJECT_TYPE.format(object_type))
+
+        except Exception as e:
+            logger.error(LOG_ERROR_GETTING_OBJECT_DETAILS.format(str(e)))
+            return self._format_error_response(str(e))
+        else:
+            return result
+
+    async def explain_query(
+        self,
+        sql: str = Field(description="SQL query to explain"),
+        *,
+        analyze: bool = Field(
+            description="When True, actually runs the query to show real execution statistics instead of estimates. "
+            "Takes longer but provides more accurate information.",
+            default=False,
+        ),
+        hypothetical_indexes: list[dict[str, Any]] = Field(  # noqa: B008
+            description=DESC_HYPOTHETICAL_INDEXES,
+            default=[],
+        ),
+    ) -> ResponseType:
+        """Explain the execution plan for a SQL query.
+
+        Args:
+            sql: SQL query to explain.
+            analyze: When True, actually runs the query for real statistics.
+            hypothetical_indexes: Optional list of indexes to simulate.
+        """
+        try:
+            sql_driver = self.sql_driver
+            explain_tool = ExplainPlanTool(sql_driver=sql_driver)
+            result: ExplainPlanArtifact | ErrorResult | None = None
+
+            # If hypothetical indexes are specified, check for HypoPG extension
+            if hypothetical_indexes and len(hypothetical_indexes) > 0:
+                if analyze:
+                    return self._format_error_response(ERROR_CANNOT_USE_ANALYZE_WITH_HYPOTHETICAL)
+                # Use the common utility function to check if hypopg is installed
+                (
+                    is_hypopg_installed,
+                    hypopg_message,
+                ) = await check_hypopg_installation_status(sql_driver)
+
+                # If hypopg is not installed, return the message
+                if not is_hypopg_installed:
+                    return hypopg_message
+
+                # HypoPG is installed, proceed with explaining with hypothetical indexes
+                result = await explain_tool.explain_with_hypothetical_indexes(sql, hypothetical_indexes)
+            elif analyze:
+                # Use EXPLAIN ANALYZE
+                result = await explain_tool.explain_analyze(sql)
+            else:
+                # Use basic EXPLAIN
+                result = await explain_tool.explain(sql)
+
+            if result and isinstance(result, ExplainPlanArtifact):
+                return result.to_text()
+            error_message = ERROR_PROCESSING_EXPLAIN_PLAN
+            if isinstance(result, ErrorResult):
+                error_message = result.to_text()
+            return self._format_error_response(error_message)
+        except Exception as e:
+            logger.error(LOG_ERROR_EXPLAINING_QUERY.format(str(e)))
+            return self._format_error_response(str(e))
+
+    async def execute_sql(
+        self,
+        sql: str = Field(description="SQL to run", default="all"),
+    ) -> ResponseType:
+        """Execute a SQL query against the database."""
+        try:
+            sql_driver = self.sql_driver
+            rows = await sql_driver.execute_query(sql)
+            if rows is None:
+                return ERROR_NO_RESULTS
+            return [r.cells for r in rows]
+        except Exception as e:
+            logger.error(LOG_ERROR_EXECUTING_QUERY.format(str(e)))
+            return self._format_error_response(str(e))
+
+    @validate_call
+    async def analyze_workload_indexes(
+        self,
+        max_index_size_mb: int = Field(description="Max index size in MB", default=10000),
+        method: Literal["dta", "llm"] = Field(description="Method to use for analysis", default="dta"),
+    ) -> ResponseType:
+        """Analyze frequently executed queries in the database and recommend optimal indexes."""
+        try:
+            sql_driver = self.sql_driver
+            index_tuning = DatabaseTuningAdvisor(sql_driver) if method == "dta" else LLMOptimizerTool(sql_driver)
+            dta_tool = TextPresentation(sql_driver, index_tuning)
+            result = await dta_tool.analyze_workload(max_index_size_mb=max_index_size_mb)  # type: ignore[no-untyped-call]
+            return cast("ResponseType", result)
+        except Exception as e:
+            logger.error(LOG_ERROR_ANALYZING_WORKLOAD.format(str(e)))
+            return self._format_error_response(str(e))
+
+    @validate_call
+    async def analyze_query_indexes(
+        self,
+        queries: list[str] = Field(description="List of Query strings to analyze"),  # noqa: B008
+        max_index_size_mb: int = Field(description="Max index size in MB", default=10000),
+        method: Literal["dta", "llm"] = Field(description="Method to use for analysis", default="dta"),
+    ) -> ResponseType:
+        """Analyze a list of SQL queries and recommend optimal indexes."""
+        if len(queries) == 0:
+            return self._format_error_response(ERROR_EMPTY_QUERIES)
+        if len(queries) > MAX_NUM_INDEX_TUNING_QUERIES:
+            return self._format_error_response(QUERIES_LIMIT_MESSAGE.format(MAX_NUM_INDEX_TUNING_QUERIES))
+
+        try:
+            sql_driver = self.sql_driver
+            index_tuning = DatabaseTuningAdvisor(sql_driver) if method == "dta" else LLMOptimizerTool(sql_driver)
+            dta_tool = TextPresentation(sql_driver, index_tuning)
+            result = await dta_tool.analyze_queries(queries=queries, max_index_size_mb=max_index_size_mb)  # type: ignore[no-untyped-call]
+            return cast("ResponseType", result)
+        except Exception as e:
+            logger.error(LOG_ERROR_ANALYZING_QUERIES.format(str(e)))
+            return self._format_error_response(str(e))
+
+    async def analyze_db_health(
+        self,
+        health_type: str = Field(
+            description="Optional. Valid values are: " + HEALTH_TYPE_VALUES + ".",
+            default="all",
+        ),
+    ) -> ResponseType:
+        """Analyze database health for specified components.
+
+        Args:
+            health_type: Comma-separated list of health check types to perform.
+                        Valid values: index, connection, vacuum, sequence, replication, buffer, constraint, all
+        """
+        health_tool = DatabaseHealthTool(self.sql_driver)  # type: ignore[no-untyped-call]
+        return await health_tool.health(health_type=health_type)
+
+    async def get_top_queries(
+        self,
+        sort_by: str = Field(
+            description=(
+                "Ranking criteria: 'total_time' for total execution time or 'mean_time' "
+                "for mean execution time per call, or 'resources' for resource-intensive queries"
+            ),
+            default="resources",
+        ),
+        limit: int = Field(
+            description="Number of queries to return when ranking based on mean_time or total_time", default=10
+        ),
+    ) -> ResponseType:
+        """Reports the slowest or most resource-intensive queries using data from the 'pg_stat_statements' extension."""
+        try:
+            sql_driver = self.sql_driver
+            top_queries_tool = TopQueriesCalc(sql_driver=sql_driver)
+
+            if sort_by == "resources":
+                return await top_queries_tool.get_top_resource_queries()
+            if sort_by in {"mean_time", "total_time"}:
+                # Map the sort_by values to what get_top_queries_by_time expects
+                result = await top_queries_tool.get_top_queries_by_time(
+                    limit=limit, sort_by="mean" if sort_by == "mean_time" else "total"
+                )
+            else:
+                return self._format_error_response(ERROR_INVALID_SORT_CRITERIA)
+        except Exception as e:
+            logger.error(LOG_ERROR_GETTING_SLOW_QUERIES.format(str(e)))
+            return self._format_error_response(str(e))
+        else:
+            return result
+
+    def register_tools(self, mcp: FastMCP) -> None:
+        """Register all tools directly with FastMCP server using mcp.tool().
+
+        Automatically registers all enabled methods listed in _tools with their
+        corresponding descriptions.
+
+        Args:
+            mcp: FastMCP server instance to register tools with.
+        """
+        registered_count = 0
+
+        for method_name, tool_config in self._tools.items():
+            if not tool_config.get("enabled", True):
+                continue
+
+            method = getattr(self, method_name)
+            description = tool_config["description"]
+            mcp.tool(method, description=description)
+            registered_count += 1
+
+        logger.info(LOG_CREATED_TOOLS.format(registered_count))

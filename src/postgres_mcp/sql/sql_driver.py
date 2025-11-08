@@ -62,8 +62,22 @@ def obfuscate_password(text: str | None) -> str | None:
 class DbConnPool:
     """Database connection manager using psycopg's connection pool."""
 
-    def __init__(self, connection_url: Optional[str] = None):
+    def __init__(
+        self,
+        connection_url: Optional[str] = None,
+        min_size: int = 1,
+        max_size: int = 5,
+    ):
+        """Initialize database connection pool.
+
+        Args:
+            connection_url: Database connection URL.
+            min_size: Minimum number of connections in the pool.
+            max_size: Maximum number of connections in the pool.
+        """
         self.connection_url = connection_url
+        self.min_size = min_size
+        self.max_size = max_size
         self.pool: AsyncConnectionPool | None = None
         self._is_valid = False
         self._last_error = None
@@ -88,8 +102,8 @@ class DbConnPool:
             # Configure connection pool with appropriate settings
             self.pool = AsyncConnectionPool(
                 conninfo=url,
-                min_size=1,
-                max_size=5,
+                min_size=self.min_size,
+                max_size=self.max_size,
                 open=False,  # Don't connect immediately, let's do it explicitly
             )
 
