@@ -5,6 +5,7 @@ description = "PostgreSQL Tuning and Analysis Tool"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "click>=8.1.0",
     "psycopg[binary]>=3.2.6",
     "humanize>=4.8.0",
     "pglast==7.2.0",
@@ -27,7 +28,7 @@ requires = [ "hatchling",]
 build-backend = "hatchling.build"
 
 [project.scripts]
-postgres-mcp = "postgres_mcp:main"
+postgres-mcp = "postgres_mcp.main:main"
 # Используем PyPI вместо внутренних репозиториев
 [[tool.uv.index]]
 name = "pypi"

@@ -30,7 +30,6 @@ from .constants import (
     ERROR_PROCESSING_EXPLAIN_PLAN,
     ERROR_UNSUPPORTED_OBJECT_TYPE,
     HEALTH_TYPE_VALUES,
-    LOG_CREATED_TOOLS,
     LOG_ERROR_ANALYZING_QUERIES,
     LOG_ERROR_ANALYZING_WORKLOAD,
     LOG_ERROR_EXECUTING_QUERY,
@@ -582,7 +581,7 @@ class Tools:
         else:
             return result
 
-    def register_tools(self, mcp: FastMCP) -> None:
+    def register_tools(self, mcp: FastMCP) -> int:
         """Register all tools directly with FastMCP server using mcp.tool().
 
         Automatically registers all enabled methods listed in _tools with their
@@ -590,6 +589,9 @@ class Tools:
 
         Args:
             mcp: FastMCP server instance to register tools with.
+
+        Returns:
+            Number of registered tools.
         """
         registered_count = 0
 
@@ -602,4 +604,4 @@ class Tools:
             mcp.tool(method, description=description)
             registered_count += 1
 
-        logger.info(LOG_CREATED_TOOLS.format(registered_count))
+        return registered_count
