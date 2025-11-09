@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from ..sql import SafeSqlDriver
@@ -6,6 +8,15 @@ from ..sql import SqlDriver
 
 @dataclass
 class TransactionIdMetrics:
+    """Metrics for transaction ID wraparound health check.
+
+    Attributes:
+        schema: Schema name of the table.
+        table: Table name.
+        transactions_left: Number of transactions remaining before wraparound.
+        is_healthy: Whether the table has healthy transaction ID age.
+    """
+
     schema: str
     table: str
     transactions_left: int
@@ -13,18 +24,23 @@ class TransactionIdMetrics:
 
 
 class VacuumHealthCalc:
+    """Calculator for database vacuum and transaction ID health checks."""
     def __init__(
         self,
         sql_driver: SqlDriver,
         threshold: int = 10000000,
         max_value: int = 2146483648,
-    ):
+    ) -> None:
         self.sql_driver = sql_driver
         self.threshold = threshold
         self.max_value = max_value
 
     async def transaction_id_danger_check(self) -> str:
-        """Check if any tables are approaching transaction ID wraparound."""
+        """Check if any tables are approaching transaction ID wraparound.
+
+        Returns:
+            String describing tables approaching transaction ID wraparound.
+        """
         metrics = await self._get_transaction_id_metrics()
 
         if not metrics:
@@ -46,7 +62,11 @@ class VacuumHealthCalc:
         return "\n".join(result)
 
     async def _get_transaction_id_metrics(self) -> list[TransactionIdMetrics]:
-        """Get transaction ID metrics for all tables."""
+        """Get transaction ID metrics for all tables.
+
+        Returns:
+            List of TransactionIdMetrics for tables approaching wraparound.
+        """
         results = await SafeSqlDriver.execute_param_query(
             self.sql_driver,
             """
@@ -85,7 +105,11 @@ class VacuumHealthCalc:
         ]
 
     async def _get_vacuum_stats(self) -> dict[str, dict[str, str | None]]:
-        """Get vacuum statistics for the database."""
+        """Get vacuum statistics for the database.
+
+        Returns:
+            Dictionary mapping table names to their vacuum statistics.
+        """
         result = await self.sql_driver.execute_query("""
             SELECT relname, last_vacuum, last_autovacuum
             FROM pg_stat_user_tables

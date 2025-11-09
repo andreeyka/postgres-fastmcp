@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from psycopg.sql import Identifier
@@ -8,6 +10,20 @@ from ..sql import SqlDriver
 
 @dataclass
 class SequenceMetrics:
+    """Metrics for database sequence health check.
+
+    Attributes:
+        schema: Schema name of the sequence.
+        table: Table name using the sequence.
+        column: Column name using the sequence.
+        sequence: Sequence name.
+        column_type: Type of the column (integer or bigint).
+        last_value: Last value used by the sequence.
+        max_value: Maximum value for the sequence type.
+        is_healthy: Whether the sequence usage is within healthy limits.
+        readable: Whether the sequence is readable.
+    """
+
     schema: str
     table: str
     column: str
@@ -20,12 +36,17 @@ class SequenceMetrics:
 
     @property
     def percent_used(self) -> float:
-        """Calculate what percentage of the sequence has been used."""
+        """Calculate what percentage of the sequence has been used.
+
+        Returns:
+            Percentage of sequence values used (0-100).
+        """
         return (self.last_value / self.max_value) * 100 if self.max_value else 0
 
 
 class SequenceHealthCalc:
-    def __init__(self, sql_driver: SqlDriver, threshold: float = 0.9):
+    """Calculator for database sequence health checks."""
+    def __init__(self, sql_driver: SqlDriver, threshold: float = 0.9) -> None:
         """Initialize sequence health calculator.
 
         Args:
@@ -36,7 +57,11 @@ class SequenceHealthCalc:
         self.threshold = threshold
 
     async def sequence_danger_check(self) -> str:
-        """Check if any sequences are approaching their maximum values."""
+        """Check if any sequences are approaching their maximum values.
+
+        Returns:
+            String describing sequences that are approaching their maximum values.
+        """
         metrics = await self._get_sequence_metrics()
 
         if not metrics:
@@ -60,7 +85,11 @@ class SequenceHealthCalc:
         return "\n".join(result)
 
     async def _get_sequence_metrics(self) -> list[SequenceMetrics]:
-        """Get metrics for sequences in the database."""
+        """Get metrics for sequences in the database.
+
+        Returns:
+            List of SequenceMetrics for all sequences in the database.
+        """
         # First get all sequences used as default values
         sequences = await self.sql_driver.execute_query("""
             SELECT
@@ -135,7 +164,14 @@ class SequenceHealthCalc:
         return sequence_metrics
 
     def _parse_sequence_name(self, default_value: str) -> tuple[str, str]:
-        """Parse schema and sequence name from default value expression."""
+        """Parse schema and sequence name from default value expression.
+
+        Args:
+            default_value: Default value expression containing nextval() call.
+
+        Returns:
+            Tuple of (schema, sequence_name).
+        """
         # Handle both formats:
         # nextval('id_seq'::regclass)
         # nextval(('id_seq'::text)::regclass)

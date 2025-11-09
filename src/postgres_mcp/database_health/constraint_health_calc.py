@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from ..sql import SqlDriver
@@ -5,6 +7,16 @@ from ..sql import SqlDriver
 
 @dataclass
 class ConstraintMetrics:
+    """Metrics for database constraint health check.
+
+    Attributes:
+        schema: Schema name of the constraint.
+        table: Table name of the constraint.
+        name: Constraint name.
+        referenced_schema: Referenced schema name if foreign key, None otherwise.
+        referenced_table: Referenced table name if foreign key, None otherwise.
+    """
+
     schema: str
     table: str
     name: str
@@ -13,14 +25,16 @@ class ConstraintMetrics:
 
 
 class ConstraintHealthCalc:
-    def __init__(self, sql_driver: SqlDriver):
+    """Calculator for database constraint health checks."""
+
+    def __init__(self, sql_driver: SqlDriver) -> None:
         self.sql_driver = sql_driver
 
     async def invalid_constraints_check(self) -> str:
         """Check for any invalid constraints in the database.
 
         Returns:
-            String describing any invalid constraints found
+            String describing any invalid constraints found.
         """
         metrics = await self._get_invalid_constraints()
 
@@ -39,7 +53,11 @@ class ConstraintHealthCalc:
         return "\n".join(result)
 
     async def _get_invalid_constraints(self) -> list[ConstraintMetrics]:
-        """Get all invalid constraints in the database."""
+        """Get all invalid constraints in the database.
+
+        Returns:
+            List of ConstraintMetrics for invalid constraints.
+        """
         results = await self.sql_driver.execute_query("""
             SELECT
                 nsp.nspname AS schema,
@@ -78,7 +96,11 @@ class ConstraintHealthCalc:
         ]
 
     async def _get_total_constraints(self) -> int:
-        """Get the total number of constraints."""
+        """Get the total number of constraints.
+
+        Returns:
+            Total number of constraints in the database.
+        """
         result = await self.sql_driver.execute_query("""
             SELECT COUNT(*) as count
             FROM information_schema.table_constraints
@@ -89,7 +111,11 @@ class ConstraintHealthCalc:
         return result_list[0]["count"] if result_list else 0
 
     async def _get_active_constraints(self) -> int:
-        """Get the number of active constraints."""
+        """Get the number of active constraints.
+
+        Returns:
+            Number of active (non-deferrable) constraints.
+        """
         result = await self.sql_driver.execute_query("""
             SELECT COUNT(*) as count
             FROM information_schema.table_constraints

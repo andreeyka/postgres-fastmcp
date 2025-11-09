@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Any
 
 from ..sql import SafeSqlDriver
@@ -5,12 +7,19 @@ from ..sql import SqlDriver
 
 
 class IndexHealthCalc:
+    """Calculator for database index health checks."""
+
     _cached_indexes: list[dict[str, Any]] | None = None
 
-    def __init__(self, sql_driver: SqlDriver):
+    def __init__(self, sql_driver: SqlDriver) -> None:
         self.sql_driver = sql_driver
 
     async def invalid_index_check(self) -> str:
+        """Check for invalid indexes in the database.
+
+        Returns:
+            String describing any invalid indexes found.
+        """
         indexes = await self._indexes()
         # Check for invalid indexes being created
         invalid_indexes = [idx for idx in indexes if not idx["valid"]]
@@ -20,6 +29,11 @@ class IndexHealthCalc:
         return "Invalid indexes found: " + "\n".join([f"{idx['name']} on {idx['table']} is invalid." for idx in invalid_indexes])
 
     async def duplicate_index_check(self) -> str:
+        """Check for duplicate or redundant indexes in the database.
+
+        Returns:
+            String describing any duplicate indexes found.
+        """
         indexes = await self._indexes()
         dup_indexes = []
 
@@ -80,10 +94,10 @@ class IndexHealthCalc:
         """Check for bloated indexes that are larger than min_size bytes.
 
         Args:
-            min_size: Minimum size in bytes to consider an index as bloated (default 100MB)
+            min_size: Minimum size in bytes to consider an index as bloated (default 100MB).
 
         Returns:
-            String describing any bloated indexes found
+            String describing any bloated indexes found.
         """
         bloated_indexes = await SafeSqlDriver.execute_param_query(
             self.sql_driver,
@@ -235,6 +249,11 @@ class IndexHealthCalc:
         return "\n".join(result)
 
     async def _indexes(self) -> list[dict[str, Any]]:
+        """Get all indexes from the database.
+
+        Returns:
+            List of index dictionaries with metadata.
+        """
         if self._cached_indexes:
             return self._cached_indexes
 
@@ -298,10 +317,10 @@ class IndexHealthCalc:
         """Check for unused or rarely used indexes.
 
         Args:
-            max_scans: Maximum number of scans to consider an index as unused (default 50)
+            max_scans: Maximum number of scans to consider an index as unused (default 50).
 
         Returns:
-            String describing any unused indexes found
+            String describing any unused indexes found.
         """
         unused = await SafeSqlDriver.execute_param_query(
             self.sql_driver,

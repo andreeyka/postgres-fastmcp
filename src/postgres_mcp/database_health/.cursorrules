@@ -1,0 +1,48 @@
+# Code Style Rules for database_health Module
+
+## Type Annotations
+
+### Use `from __future__ import annotations`
+- **ALWAYS** add `from __future__ import annotations` at the top of Python files (after module docstring, before other imports)
+- This allows using forward references and cleaner type annotations without quotes
+
+### Modern Type Syntax
+- Use modern type hints: `str | None` instead of `Optional[str]`
+- Use `from __future__ import annotations` to avoid quoting forward references
+- All `__init__` methods must have `-> None` return type annotation
+
+## Docstrings
+
+### Format: Google Style (English)
+- All public classes must have docstrings
+- All public methods must have docstrings
+- Use Google Style format with Args and Returns sections
+- Docstrings must be in English
+
+### Example Class Docstring:
+```python
+class ExampleClass:
+    """Brief description of the class.
+
+    Detailed description if needed.
+    """
+```
+
+### Example Method Docstring:
+```python
+async def method_name(self, param: str) -> str:
+    """Brief description of the method.
+
+    Args:
+        param: Description of the parameter.
+
+    Returns:
+        Description of the return value.
+    """
+```
+
+## Important Notes
+- Do NOT change code logic, only formatting and documentation
+- Do NOT fix linter warnings about relative imports (these are warnings, not errors)
+- Preserve all existing functionality
+

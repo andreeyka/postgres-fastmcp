@@ -1,11 +1,20 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Optional
 
 from ..sql import SqlDriver
 
 
 @dataclass
 class ReplicationSlot:
+    """Information about a replication slot.
+
+    Attributes:
+        slot_name: Name of the replication slot.
+        database: Database name for the slot.
+        active: Whether the slot is currently active.
+    """
+
     slot_name: str
     database: str
     active: bool
@@ -13,20 +22,34 @@ class ReplicationSlot:
 
 @dataclass
 class ReplicationMetrics:
+    """Metrics for database replication health check.
+
+    Attributes:
+        is_replica: Whether this database is a replica.
+        replication_lag_seconds: Replication lag in seconds, None if not available.
+        is_replicating: Whether replication is currently active.
+        replication_slots: List of replication slots.
+    """
+
     is_replica: bool
-    replication_lag_seconds: Optional[float]
+    replication_lag_seconds: float | None
     is_replicating: bool
     replication_slots: list[ReplicationSlot]
 
 
 class ReplicationCalc:
-    def __init__(self, sql_driver: SqlDriver):
+    """Calculator for database replication health checks."""
+    def __init__(self, sql_driver: SqlDriver) -> None:
         self.sql_driver = sql_driver
-        self._server_version: Optional[int] = None
+        self._server_version: int | None = None
         self._feature_support: dict[str, bool] = {}
 
     async def replication_health_check(self) -> str:
-        """Check replication health including lag and slots."""
+        """Check replication health including lag and slots.
+
+        Returns:
+            String describing the replication health status.
+        """
         metrics = await self._get_replication_metrics()
         result = []
 
@@ -71,7 +94,11 @@ class ReplicationCalc:
         return "\n".join(result)
 
     async def _get_replication_metrics(self) -> ReplicationMetrics:
-        """Get comprehensive replication metrics."""
+        """Get comprehensive replication metrics.
+
+        Returns:
+            ReplicationMetrics object with all replication information.
+        """
         return ReplicationMetrics(
             is_replica=await self._is_replica(),
             replication_lag_seconds=await self._get_replication_lag(),
@@ -80,13 +107,21 @@ class ReplicationCalc:
         )
 
     async def _is_replica(self) -> bool:
-        """Check if this database is a replica."""
+        """Check if this database is a replica.
+
+        Returns:
+            True if the database is in recovery mode (replica), False otherwise.
+        """
         result = await self.sql_driver.execute_query("SELECT pg_is_in_recovery()")
         result_list = [dict(x.cells) for x in result] if result is not None else []
         return bool(result_list[0]["pg_is_in_recovery"]) if result_list else False
 
-    async def _get_replication_lag(self) -> Optional[float]:
-        """Get replication lag in seconds."""
+    async def _get_replication_lag(self) -> float | None:
+        """Get replication lag in seconds.
+
+        Returns:
+            Replication lag in seconds, or None if not available or not a replica.
+        """
         if not self._feature_supported("replication_lag"):
             return None
 
@@ -112,7 +147,11 @@ class ReplicationCalc:
             return None
 
     async def _get_replication_slots(self) -> list[ReplicationSlot]:
-        """Get information about replication slots."""
+        """Get information about replication slots.
+
+        Returns:
+            List of ReplicationSlot objects.
+        """
         if await self._get_server_version() < 90400 or not self._feature_supported("replication_slots"):
             return []
 
@@ -140,7 +179,11 @@ class ReplicationCalc:
             return []
 
     async def _is_replicating(self) -> bool:
-        """Check if replication is active."""
+        """Check if replication is active.
+
+        Returns:
+            True if replication is active, False otherwise.
+        """
         if not self._feature_supported("replicating"):
             return False
 
@@ -153,7 +196,11 @@ class ReplicationCalc:
             return False
 
     async def _get_server_version(self) -> int:
-        """Get PostgreSQL server version as a number (e.g. 100000 for version 10.0)."""
+        """Get PostgreSQL server version as a number.
+
+        Returns:
+            Server version number (e.g. 100000 for version 10.0).
+        """
         if self._server_version is None:
             result = await self.sql_driver.execute_query("SHOW server_version_num")
             result_list = [dict(x.cells) for x in result] if result is not None else []
@@ -161,5 +208,12 @@ class ReplicationCalc:
         return self._server_version
 
     def _feature_supported(self, feature: str) -> bool:
-        """Check if a feature is supported and cache the result."""
+        """Check if a feature is supported and cache the result.
+
+        Args:
+            feature: Feature name to check.
+
+        Returns:
+            True if the feature is supported, False otherwise.
+        """
         return self._feature_support.get(feature, True)

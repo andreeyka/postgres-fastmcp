@@ -1,19 +1,26 @@
+from __future__ import annotations
+
 from typing import Any
 
 from ..sql import SqlDriver
 
 
 class BufferHealthCalc:
+    """Calculator for database buffer cache health checks."""
+
     _cached_indexes: list[dict[str, Any]] | None = None
 
-    def __init__(self, sql_driver: SqlDriver):
+    def __init__(self, sql_driver: SqlDriver) -> None:
         self.sql_driver = sql_driver
 
     async def index_hit_rate(self, threshold: float = 0.95) -> str:
         """Calculate the index cache hit rate.
 
+        Args:
+            threshold: Minimum hit rate threshold (default: 0.95).
+
         Returns:
-            String describing the index cache hit rate as a percentage and comparison to threshold
+            String describing the index cache hit rate as a percentage and comparison to threshold.
         """
         result = await self.sql_driver.execute_query("""
             SELECT
@@ -37,8 +44,11 @@ class BufferHealthCalc:
     async def table_hit_rate(self, threshold: float = 0.95) -> str:
         """Calculate the table cache hit rate.
 
+        Args:
+            threshold: Minimum hit rate threshold (default: 0.95).
+
         Returns:
-            String describing the table cache hit rate as a percentage and comparison to threshold
+            String describing the table cache hit rate as a percentage and comparison to threshold.
         """
         result = await self.sql_driver.execute_query("""
             SELECT

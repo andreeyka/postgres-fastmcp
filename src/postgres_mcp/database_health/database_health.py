@@ -33,18 +33,23 @@ class HealthType(str, Enum):
 class DatabaseHealthTool:
     """Tool for analyzing database health metrics."""
 
-    def __init__(self, sql_driver):
+    def __init__(self, sql_driver) -> None:
+        """Initialize the database health tool.
+
+        Args:
+            sql_driver: SQL driver instance for database access.
+        """
         self.sql_driver = sql_driver
 
     async def health(self, health_type: str) -> str:
         """Run database health checks for the specified components.
 
         Args:
-            health_type: Comma-separated list of health check types to perform
-                         Valid values: index, connection, vacuum, sequence, replication, buffer, constraint, all
+            health_type: Comma-separated list of health check types to perform.
+                Valid values: index, connection, vacuum, sequence, replication, buffer, constraint, all.
 
         Returns:
-            A string with the health check results
+            String with the health check results.
         """
         try:
             result = ""
