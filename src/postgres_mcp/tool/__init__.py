@@ -1,6 +1,6 @@
 """MCP tools module."""
 
-from postgres_mcp.tool.tools import Tools
+from postgres_mcp.tool.tools import ToolManager
 
 
-__all__ = ["Tools"]
+__all__ = ["ToolManager"]

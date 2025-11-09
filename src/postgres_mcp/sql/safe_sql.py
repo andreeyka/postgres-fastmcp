@@ -74,6 +74,9 @@ from pglast.ast import WindowClause
 from pglast.ast import WindowDef
 from pglast.ast import WindowFunc
 from pglast.ast import WithClause
+from pglast.ast import InsertStmt
+from pglast.ast import UpdateStmt
+from pglast.ast import DeleteStmt
 from pglast.enums import A_Expr_Kind
 from psycopg.sql import SQL
 from psycopg.sql import Composable
@@ -862,21 +865,72 @@ class SafeSqlDriver(SqlDriver):
         "postgis_topology",
     }
 
-    def __init__(self, sql_driver: SqlDriver, timeout: float | None = None):
+    def __init__(
+        self,
+        sql_driver: SqlDriver,
+        timeout: float | None = None,
+        allowed_schema: str | None = None,
+        read_only: bool = True,
+    ):
         """Initialize with an underlying SQL driver and optional timeout.
 
         Args:
             sql_driver: The underlying SQL driver to wrap
             timeout: Optional timeout in seconds for query execution
+            allowed_schema: Allowed schema name (e.g., 'public'). None means all schemas allowed.
+            read_only: If True, only read-only operations are allowed. If False, DML (INSERT/UPDATE/DELETE) is allowed but DDL is still prohibited.
         """
         self.sql_driver = sql_driver
         self.timeout = timeout
+        self.allowed_schema = allowed_schema
+        self.read_only = read_only
+
+    def _validate_schema_access(self, range_var: RangeVar) -> None:
+        """Проверяет, что таблица относится к разрешенной схеме.
+
+        Args:
+            range_var: Узел RangeVar, представляющий таблицу.
+
+        Raises:
+            ValueError: Если схема таблицы не разрешена.
+        """
+        if not self.allowed_schema:
+            # Если allowed_schema не задан (ADMIN режим), разрешаем все
+            return
+
+        schemaname = range_var.schemaname
+        relname = range_var.relname
+
+        # Разрешенные системные схемы (всегда доступны)
+        ALLOWED_SYSTEM_SCHEMAS = {"pg_catalog", "information_schema"}
+
+        if schemaname is None:
+            # Неявная схема (без указания схемы) - разрешаем
+            # PostgreSQL использует search_path, который будет установлен в public
+            return
+
+        schemaname_lower = schemaname.lower()
+
+        # Разрешаем системные схемы
+        if schemaname_lower in ALLOWED_SYSTEM_SCHEMAS:
+            return
+
+        # Проверяем, что схема совпадает с разрешенной
+        if schemaname_lower != self.allowed_schema.lower():
+            raise ValueError(
+                f"Access to schema '{schemaname}' is not allowed. "
+                f"Only '{self.allowed_schema}' schema is permitted."
+            )
 
     def _validate_node(self, node: Node) -> None:
         """Recursively validate a node and all its children"""
         # Check if node type is allowed
         if not isinstance(node, tuple(self.ALLOWED_NODE_TYPES)):
             raise ValueError(f"Node type {type(node)} is not allowed")
+
+        # Validate schema access for tables
+        if isinstance(node, RangeVar):
+            self._validate_schema_access(node)
 
         # Validate LIKE patterns
         if isinstance(node, A_Expr) and node.kind in (
@@ -952,21 +1006,44 @@ class SafeSqlDriver(SqlDriver):
             # import pprint
             # pprint.pprint(parsed)
 
+            # Build allowed statement types based on read_only mode
+            allowed_stmt_types = set(self.ALLOWED_STMT_TYPES)
+            if not self.read_only:
+                # Allow DML operations (INSERT, UPDATE, DELETE) when read_only=False
+                allowed_stmt_types.add(InsertStmt)
+                allowed_stmt_types.add(UpdateStmt)
+                allowed_stmt_types.add(DeleteStmt)
+
             # Validate each statement
             try:
                 for stmt in parsed:
-                    if isinstance(stmt, RawStmt):
-                        # Check if the inner statement type is allowed
-                        if not isinstance(stmt.stmt, tuple(self.ALLOWED_STMT_TYPES)):
-                            raise ValueError(
-                                "Only SELECT, ANALYZE, VACUUM, EXPLAIN, SHOW and other read-only statements are allowed. Received raw statement: "
-                                + str(stmt.stmt)
+                    stmt_node = stmt.stmt if isinstance(stmt, RawStmt) else stmt
+                    
+                    # Check if the statement type is allowed
+                    if not isinstance(stmt_node, tuple(allowed_stmt_types)):
+                        if self.read_only:
+                            error_msg = (
+                                "Only SELECT, ANALYZE, VACUUM, EXPLAIN, SHOW and other read-only statements are allowed. "
+                                f"Received: {type(stmt_node).__name__}"
                             )
-                    else:
-                        if not isinstance(stmt, tuple(self.ALLOWED_STMT_TYPES)):
-                            raise ValueError(
-                                "Only SELECT, ANALYZE, VACUUM, EXPLAIN, SHOW and other read-only statements are allowed. Received: " + str(stmt)
+                        else:
+                            error_msg = (
+                                "Only SELECT, INSERT, UPDATE, DELETE, ANALYZE, VACUUM, EXPLAIN, SHOW and other allowed statements are permitted. "
+                                "DDL operations (CREATE, DROP, ALTER) are not allowed. "
+                                f"Received: {type(stmt_node).__name__}"
                             )
+                        raise ValueError(error_msg)
+                    
+                    # Check for DDL operations (always prohibited, even in RW mode)
+                    # We need to check the actual statement type
+                    stmt_type_name = type(stmt_node).__name__
+                    if "Create" in stmt_type_name or "Drop" in stmt_type_name or "Alter" in stmt_type_name:
+                        # Allow CreateExtensionStmt as it's already in ALLOWED_STMT_TYPES
+                        if not isinstance(stmt_node, CreateExtensionStmt):
+                            raise ValueError(
+                                f"DDL operations are not allowed. Received: {stmt_type_name}"
+                            )
+                    
                     self._validate_node(stmt)
             except Exception as e:
                 raise ValueError(f"Error validating query: {query}") from e
@@ -983,14 +1060,28 @@ class SafeSqlDriver(SqlDriver):
         """Execute a query after validating it is safe"""
         self._validate(query)
 
-        # NOTE: Always force readonly=True in SafeSqlDriver regardless of what was passed
+        # Set search_path if allowed_schema is specified (USER mode)
+        # This ensures that unqualified table names resolve to the allowed schema
+        if self.allowed_schema:
+            # Prepend SET search_path command to the query
+            # We need to execute this as a separate statement first
+            # But since we're using a connection pool, we need to set it per connection
+            # For now, we'll set it in the query itself using a DO block or separate SET
+            # Actually, better approach: set it before the query in the same transaction
+            query_with_search_path = f"SET LOCAL search_path = {self.allowed_schema}; {query}"
+        else:
+            query_with_search_path = query
+
+        # NOTE: Use self.read_only to determine force_readonly, not the parameter
+        force_readonly_value = self.read_only
+
         if self.timeout:
             try:
                 async with asyncio.timeout(self.timeout):
                     return await self.sql_driver.execute_query(
-                        f"/* crystaldba */ {query}",
+                        f"/* crystaldba */ {query_with_search_path}",
                         params=params,
-                        force_readonly=True,
+                        force_readonly=force_readonly_value,
                     )
             except asyncio.TimeoutError as e:
                 logger.warning(f"Query execution timed out after {self.timeout} seconds: {query[:100]}...")
@@ -1003,9 +1094,9 @@ class SafeSqlDriver(SqlDriver):
                 raise
         else:
             return await self.sql_driver.execute_query(
-                f"/* crystaldba */ {query}",
+                f"/* crystaldba */ {query_with_search_path}",
                 params=params,
-                force_readonly=True,
+                force_readonly=force_readonly_value,
             )
 
     @staticmethod

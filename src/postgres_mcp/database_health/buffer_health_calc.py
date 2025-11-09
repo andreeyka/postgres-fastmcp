@@ -32,8 +32,7 @@ class BufferHealthCalc:
 
         if hit_rate >= threshold_pct:
             return f"Index cache hit rate: {hit_rate:.1f}% (above {threshold_pct:.1f}% threshold)"
-        else:
-            return f"Index cache hit rate: {hit_rate:.1f}% (below {threshold_pct:.1f}% threshold)"
+        return f"Index cache hit rate: {hit_rate:.1f}% (below {threshold_pct:.1f}% threshold)"
 
     async def table_hit_rate(self, threshold: float = 0.95) -> str:
         """Calculate the table cache hit rate.
@@ -58,5 +57,4 @@ class BufferHealthCalc:
 
         if hit_rate >= threshold_pct:
             return f"Table cache hit rate: {hit_rate:.1f}% (above {threshold_pct:.1f}% threshold)"
-        else:
-            return f"Table cache hit rate: {hit_rate:.1f}% (below {threshold_pct:.1f}% threshold)"
+        return f"Table cache hit rate: {hit_rate:.1f}% (below {threshold_pct:.1f}% threshold)"

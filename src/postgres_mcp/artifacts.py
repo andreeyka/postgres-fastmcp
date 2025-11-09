@@ -1,11 +1,13 @@
 """Artifacts for the Database Tuning Advisor."""
 
+from __future__ import annotations
+
 import difflib
 import json
 from typing import Any
 
-from attrs import define
-from attrs import field
+from attrs import define, field
+
 
 # If the recommendation cost is 0.0, we can't calculate the improvement multiple.
 # Return 1000000.0 to indicate infinite improvement.
@@ -57,10 +59,10 @@ class PlanNode:
     # Other common fields
     relation_name: str | None = field(default=None)
     filter: str | None = field(default=None)
-    children: list["PlanNode"] = field(factory=list)
+    children: list[PlanNode] = field(factory=list)
 
     @classmethod
-    def from_json_data(cls, json_node: dict[str, Any]) -> "PlanNode":
+    def from_json_data(cls, json_node: dict[str, Any]) -> PlanNode:
         # Extract basic fields
         node = cls(
             node_type=json_node["Node Type"],
@@ -157,9 +159,7 @@ class ExplainPlanArtifact:
 
         # Add actual metrics if available in a compact form
         if node.actual_total_time is not None:
-            output += (
-                f" [Actual: {node.actual_startup_time:.2f}..{node.actual_total_time:.2f} ms, Rows: {node.actual_rows}, Loops: {node.actual_loops}]"
-            )
+            output += f" [Actual: {node.actual_startup_time:.2f}..{node.actual_total_time:.2f} ms, Rows: {node.actual_rows}, Loops: {node.actual_loops}]"
 
         # Add filter if present
         if node.filter:
@@ -181,7 +181,7 @@ class ExplainPlanArtifact:
         return output
 
     @classmethod
-    def from_json_data(cls, plan_data: dict[str, Any]) -> "ExplainPlanArtifact":
+    def from_json_data(cls, plan_data: dict[str, Any]) -> ExplainPlanArtifact:
         if "Plan" not in plan_data:
             raise ValueError("Missing 'Plan' field in explain plan data")
 
@@ -214,8 +214,7 @@ class ExplainPlanArtifact:
                 plan_tree = ExplainPlanArtifact._format_plan_node(plan_node, 0)
 
                 return f"{plan_tree}"
-            else:
-                return "Invalid plan data (missing Plan field)"
+            return "Invalid plan data (missing Plan field)"
 
         except Exception as e:
             return f"Error summarizing plan: {e}"
@@ -309,7 +308,9 @@ class ExplainPlanArtifact:
             before_scans = [line for line in before_lines if "Seq Scan" in line]
             after_scans = [line for line in after_lines if "Seq Scan" in line]
             if len(before_scans) > len(after_scans):
-                diff_lines.append(f"- {len(before_scans) - len(after_scans)} sequential scans replaced with more efficient access methods")
+                diff_lines.append(
+                    f"- {len(before_scans) - len(after_scans)} sequential scans replaced with more efficient access methods"
+                )
 
             # Look for new index scans
             before_idx_scans = [line for line in before_lines if "Index Scan" in line]

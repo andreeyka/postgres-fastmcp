@@ -1,5 +1,7 @@
 """Module for configuring logging with Rich."""
 
+from __future__ import annotations
+
 import logging
 from typing import Literal
 
@@ -74,4 +76,3 @@ def get_logger(name: str) -> logging.Logger:
         Configured logger.
     """
     return logging.getLogger(name)
-

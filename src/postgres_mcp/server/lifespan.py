@@ -2,113 +2,158 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
-from devtools import debug
-from fastmcp import FastMCP
-
-from postgres_mcp.config import app_settings
 from postgres_mcp.logger import get_logger
-from postgres_mcp.tool import Tools
+from postgres_mcp.sql import obfuscate_password
+from postgres_mcp.tool import ToolManager
 
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from fastmcp import FastMCP
+
+    from postgres_mcp.config import Settings
+
 
 logger = get_logger(__name__)
 
-# Storage for Tools instances and sub-servers (used in HTTP endpoint mode)
-# Keyed by server name to allow multiple server instances
-# Value is dict mapping server names to (Tools instance, sub_server) tuples
-_tools_instances_storage: dict[str, dict[str, tuple[Tools, FastMCP]]] = {}
 
+class LifespanManager:
+    """Lifespan manager for FastMCP server.
 
-def register_tools_with_servers() -> dict[str, tuple[Tools, FastMCP]]:
-    """Create Tools instances and register them with sub-servers.
-
-    This function only creates Tools instances and registers tools on sub-servers.
-    It does NOT mount servers - mounting logic is in http.py and stdio.py.
-
-    Returns:
-        Dictionary mapping server names to (Tools instance, sub_server) tuples.
+    Manages creation and lifecycle of ToolManager instances and database connections.
     """
-    tools_instances: dict[str, tuple[Tools, FastMCP]] = {}
 
-    for server_name, server_config in app_settings.servers.items():
-        # Create Tools instance for this server
-        tools = Tools(config=server_config)
-        logger.debug("Created Tools instance for server: %s", server_name)
+    def __init__(self, config: Settings) -> None:
+        """Initialize lifespan manager.
 
-        # Create sub-server and register tools on it
-        sub_server = FastMCP(name=server_name)
-        tools_count = tools.register_tools(sub_server)
+        Creates ToolManager instances according to configuration.
 
-        tools_instances[server_name] = (tools, sub_server)
-        logger.debug("Registered %d tools on sub-server: %s", tools_count, server_name)
+        Args:
+            config: Application configuration with server settings.
+        """
+        self.config = config
+        self.tools_instances: dict[str, ToolManager] = {}
+        for server_name, server_config in config.databases.items():
+            tools = ToolManager(config=server_config)
+            self.tools_instances[server_name] = tools
+            logger.debug("Created ToolManager instance for server: %s", server_name)
 
-    return tools_instances
+    def create_lifespan(self) -> Any:  # noqa: ANN401
+        """Create lifespan context manager for FastMCP server.
 
+        Returns:
+            Lifespan context manager that can be passed to FastMCP constructor.
+        """
 
-def get_tools_and_server(server_name: str, tools_server_name: str) -> tuple[Tools, FastMCP] | None:
-    """Get Tools instance and sub-server for a specific server.
+        @asynccontextmanager
+        async def lifespan(_server: FastMCP[Any]) -> AsyncIterator[dict[str, Any]]:
+            """Lifespan context manager for ToolManager instances lifecycle.
 
-    Args:
-        server_name: Name of the FastMCP server instance.
-        tools_server_name: Name of the tools server (from config).
+            Initializes database connections on startup and closes them on shutdown.
 
-    Returns:
-        Tuple of (Tools instance, sub_server), or None if not found.
-    """
-    tools_instances = _tools_instances_storage.get(server_name)
-    if tools_instances is None:
-        return None
-    return tools_instances.get(tools_server_name)
+            Args:
+                _server: FastMCP server instance (unused but required by signature).
 
+            Yields:
+                Empty dictionary.
+            """
+            async with AsyncExitStack() as stack:
+                # Enter context of all ToolManager instances for proper cleanup
+                for tools_instance in self.tools_instances.values():
+                    await stack.enter_async_context(tools_instance)
 
-@asynccontextmanager
-async def fastmcp_lifespan(
-    server: FastMCP[Any],
-) -> AsyncIterator[dict[str, Any]]:
-    """Create lifespan context manager that creates and manages Tools instances.
+                # Initialize database connections for all ToolManager instances in parallel
+                logger.info("Initializing database connections...")
 
-    This lifespan is designed to be passed to FastMCP server constructor.
-    FastMCP will automatically manage the lifecycle of this lifespan.
+                async def connect_server(server_name: str, tools_instance: ToolManager) -> tuple[str, bool, str | None]:
+                    """Connect to database for one server.
 
-    The lifespan also registers tools on the server after creating Tools instances.
+                    Args:
+                        server_name: Server name.
+                        tools_instance: ToolManager instance to connect.
 
-    Args:
-        server: FastMCP server instance (required by FastMCP lifespan signature).
+                    Returns:
+                        Tuple (server_name, success, error_message).
+                    """
+                    try:
+                        await tools_instance.db_connection.pool_connect()
+                        logger.info("Successfully connected to database for server: %s", server_name)
+                    except Exception as e:
+                        error_msg = obfuscate_password(str(e))
+                        logger.warning(
+                            "Could not connect to database for server '%s': %s. "
+                            "The server will start but database operations will fail "
+                            "until a valid connection is established.",
+                            server_name,
+                            error_msg,
+                        )
+                        return (server_name, False, error_msg)
+                    else:
+                        return (server_name, True, None)
 
-    Yields:
-        Empty dictionary (Tools instances are managed via AsyncExitStack, not through lifespan result).
-    """
-    # Create Tools instances and register them with servers
-    # Check if Tools instances were already created (e.g., in http.py for endpoint mode)
-    # If they were, reuse them; otherwise, create new ones
-    debug(server.name)
-    yield {}
-    tools_instances = _tools_instances_storage.get(server.name)
-    if tools_instances is None:
-        # Tools instances not created yet, create them now
-        tools_instances = register_tools_with_servers()
-        # Store Tools instances for HTTP endpoint mode (so http.py can use them)
-        _tools_instances_storage[server.name] = tools_instances
-    else:
-        # Tools instances already created (e.g., in http.py), reuse them
-        # This happens when http.py calls register_tools_with_servers before creating http_app()
-        logger.debug("Reusing existing Tools instances for server: %s", server.name)
+                # Start all connections in parallel
+                results = await asyncio.gather(
+                    *[
+                        connect_server(server_name, tools_instance)
+                        for server_name, tools_instance in self.tools_instances.items()
+                    ],
+                    return_exceptions=False,
+                )
 
-    async with AsyncExitStack() as stack:
-        # Enter all Tools instances as context managers for proper cleanup
-        for tools_instance, _sub_server in tools_instances.values():
-            await stack.enter_async_context(tools_instance)
-        # Database connections are created lazily on first use
-        logger.info("Server started, database connections will be created on first use")
-        # Yield empty dict - Tools instances are managed via AsyncExitStack
-        # Result is not used anywhere, so we don't need to return tools_instances
-        yield {}
-        # Cleanup happens automatically via AsyncExitStack
-        # Clear Tools instances storage for this server
-        _tools_instances_storage.pop(server.name, None)
+                # Analyze connection results
+                successful: list[str] = []
+                failed: list[tuple[str, str | None]] = []
+
+                for server_name, success, error_msg in results:
+                    if success:
+                        successful.append(server_name)
+                    else:
+                        failed.append((server_name, error_msg))
+
+                # Output final statistics
+                total = len(self.tools_instances)
+                success_count = len(successful)
+                failed_count = len(failed)
+
+                if failed_count == 0:
+                    logger.info(
+                        "Server started successfully. All %d database connection(s) initialized.",
+                        success_count,
+                    )
+                elif success_count == 0:
+                    logger.error(
+                        "Server started, but ALL %d database connection(s) failed to initialize. "
+                        "Database operations will not work until connections are established. "
+                        "Failed servers: %s",
+                        failed_count,
+                        ", ".join(server_name for server_name, _ in failed),
+                    )
+                else:
+                    logger.warning(
+                        "Server started with partial database connectivity. "
+                        "%d of %d connection(s) succeeded, %d failed. "
+                        "Failed servers: %s",
+                        success_count,
+                        total,
+                        failed_count,
+                        ", ".join(server_name for server_name, _ in failed),
+                    )
+                yield {}
+
+        return lifespan
+
+    def get_tools(self, server_name: str) -> ToolManager | None:
+        """Get ToolManager instance by server name.
+
+        Args:
+            server_name: Server name.
+
+        Returns:
+            ToolManager instance or None if not found.
+        """
+        return self.tools_instances.get(server_name)

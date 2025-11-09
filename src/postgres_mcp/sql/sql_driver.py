@@ -1,25 +1,23 @@
 """SQL driver adapter for PostgreSQL connections."""
 
+from __future__ import annotations
+
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any
-from typing import Dict
-from typing import List
-from typing import Optional
-from urllib.parse import urlparse
-from urllib.parse import urlunparse
+from typing import Any, LiteralString
+from urllib.parse import urlparse, urlunparse
 
+from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
-from typing_extensions import LiteralString
+
 
 logger = logging.getLogger(__name__)
 
 
 def obfuscate_password(text: str | None) -> str | None:
-    """
-    Obfuscate password in any text containing connection information.
+    """Obfuscate password in any text containing connection information.
     Works on connection URLs, error messages, and other strings.
     """
     if text is None:
@@ -64,7 +62,7 @@ class DbConnPool:
 
     def __init__(
         self,
-        connection_url: Optional[str] = None,
+        connection_url: str | None = None,
         min_size: int = 1,
         max_size: int = 5,
     ):
@@ -82,7 +80,7 @@ class DbConnPool:
         self._is_valid = False
         self._last_error = None
 
-    async def pool_connect(self, connection_url: Optional[str] = None) -> AsyncConnectionPool:
+    async def pool_connect(self, connection_url: str | None = None) -> AsyncConnectionPool:
         """Initialize connection pool with retry logic."""
         # If we already have a valid pool, return it
         if self.pool and self._is_valid:
@@ -111,9 +109,8 @@ class DbConnPool:
             await self.pool.open()
 
             # Test the connection pool by executing a simple query
-            async with self.pool.connection() as conn:
-                async with conn.cursor() as cursor:
-                    await cursor.execute("SELECT 1")
+            async with self.pool.connection() as conn, conn.cursor() as cursor:
+                await cursor.execute("SELECT 1")
 
             self._is_valid = True
             self._last_error = None
@@ -145,7 +142,7 @@ class DbConnPool:
         return self._is_valid
 
     @property
-    def last_error(self) -> Optional[str]:
+    def last_error(self) -> str | None:
         """Get the last error message."""
         return self._last_error
 
@@ -157,15 +154,14 @@ class SqlDriver:
     class RowResult:
         """Simple class to match the Griptape RowResult interface."""
 
-        cells: Dict[str, Any]
+        cells: dict[str, Any]
 
     def __init__(
         self,
         conn: Any = None,
         engine_url: str | None = None,
     ):
-        """
-        Initialize with a PostgreSQL connection or pool.
+        """Initialize with a PostgreSQL connection or pool.
 
         Args:
             conn: PostgreSQL connection object or pool
@@ -190,17 +186,15 @@ class SqlDriver:
             self.conn = DbConnPool(self.engine_url)
             self.is_pool = True
             return self.conn
-        else:
-            raise ValueError("Connection not established. Either conn or engine_url must be provided")
+        raise ValueError("Connection not established. Either conn or engine_url must be provided")
 
     async def execute_query(
         self,
         query: LiteralString,
         params: list[Any] | None = None,
         force_readonly: bool = False,
-    ) -> Optional[List[RowResult]]:
-        """
-        Execute a query and return results.
+    ) -> list[RowResult] | None:
+        """Execute a query and return results.
 
         Args:
             query: SQL query to execute
@@ -221,9 +215,15 @@ class SqlDriver:
                 # For pools, get a connection from the pool
                 pool = await self.conn.pool_connect()
                 async with pool.connection() as connection:
+                    # Set autocommit=True to avoid "transaction in progress" warnings
+                    # We manage transactions explicitly in _execute_with_connection
+                    await connection.set_autocommit(True)
                     return await self._execute_with_connection(connection, query, params, force_readonly=force_readonly)
             else:
                 # Direct connection approach
+                # Ensure autocommit is set for direct connections too
+                if hasattr(self.conn, "set_autocommit"):
+                    await self.conn.set_autocommit(True)
                 return await self._execute_with_connection(self.conn, query, params, force_readonly=force_readonly)
         except Exception as e:
             # Mark pool as invalid if there was a connection issue
@@ -235,52 +235,70 @@ class SqlDriver:
 
             raise e
 
-    async def _execute_with_connection(self, connection, query, params, force_readonly) -> Optional[List[RowResult]]:
-        """Execute query with the given connection."""
-        transaction_started = False
+    async def _execute_with_connection(
+        self,
+        connection: AsyncConnection[Any],
+        query: LiteralString,
+        params: list[Any] | None,
+        *,
+        force_readonly: bool,
+    ) -> list[RowResult] | None:
+        """Execute query with the given connection.
+
+        Manages transactions explicitly:
+        - For read-only queries: uses BEGIN TRANSACTION READ ONLY / ROLLBACK
+        - For write queries: uses BEGIN / COMMIT
+        - With autocommit=True, we can safely start transactions without conflicts
+        """
         try:
             async with connection.cursor(row_factory=dict_row) as cursor:
-                # Start read-only transaction
+                # Start transaction explicitly
                 if force_readonly:
+                    # For read-only mode, start a read-only transaction
                     await cursor.execute("BEGIN TRANSACTION READ ONLY")
-                    transaction_started = True
-
-                if params:
-                    await cursor.execute(query, params)
                 else:
-                    await cursor.execute(query)
+                    # For write mode, start a normal transaction
+                    await cursor.execute("BEGIN")
 
-                # For multiple statements, move to the last statement's results
-                while cursor.nextset():
-                    pass
+                try:
+                    # Execute the query
+                    if params:
+                        await cursor.execute(query, params)
+                    else:
+                        await cursor.execute(query)
 
-                if cursor.description is None:  # No results (like DDL statements)
-                    if not force_readonly:
-                        await cursor.execute("COMMIT")
-                    elif transaction_started:
+                    # For multiple statements, move to the last statement's results
+                    while cursor.nextset():
+                        pass
+
+                    # Check if there are results
+                    if cursor.description is None:  # No results (like DDL statements)
+                        # Commit or rollback based on mode
+                        if force_readonly:
+                            await cursor.execute("ROLLBACK")
+                        else:
+                            await cursor.execute("COMMIT")
+                        return None
+
+                    # Get results from the last statement only
+                    rows = await cursor.fetchall()
+
+                    # End the transaction appropriately
+                    if force_readonly:
                         await cursor.execute("ROLLBACK")
-                        transaction_started = False
-                    return None
+                    else:
+                        await cursor.execute("COMMIT")
 
-                # Get results from the last statement only
-                rows = await cursor.fetchall()
+                    return [SqlDriver.RowResult(cells=dict(row)) for row in rows]
 
-                # End the transaction appropriately
-                if not force_readonly:
-                    await cursor.execute("COMMIT")
-                elif transaction_started:
-                    await cursor.execute("ROLLBACK")
-                    transaction_started = False
-
-                return [SqlDriver.RowResult(cells=dict(row)) for row in rows]
+                except Exception as query_error:
+                    # Rollback on any error during query execution
+                    try:
+                        await cursor.execute("ROLLBACK")
+                    except Exception as rollback_error:
+                        logger.error(f"Error rolling back transaction: {rollback_error}")
+                    raise query_error
 
         except Exception as e:
-            # Try to roll back the transaction if it's still active
-            if transaction_started:
-                try:
-                    await connection.rollback()
-                except Exception as rollback_error:
-                    logger.error(f"Error rolling back transaction: {rollback_error}")
-
             logger.error(f"Error executing query ({query}): {e}")
             raise e

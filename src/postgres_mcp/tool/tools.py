@@ -38,7 +38,6 @@ from .constants import (
     LOG_ERROR_GETTING_SLOW_QUERIES,
     LOG_ERROR_LISTING_OBJECTS,
     LOG_ERROR_LISTING_SCHEMAS,
-    LOG_SAFE_SQL_DRIVER,
     LOG_UNRESTRICTED_SQL_DRIVER,
     QUERIES_LIMIT_MESSAGE,
 )
@@ -80,7 +79,7 @@ logger = get_logger(__name__)
 ResponseType = str | dict[str, Any] | list[Any]
 
 
-class Tools:
+class ToolManager:
     """Class for creating and managing MCP tools.
 
     Encapsulates all tools for working with PostgreSQL through the MCP protocol.
@@ -103,7 +102,7 @@ class Tools:
         self,
         config: DatabaseConfig,
     ) -> None:
-        """Initialize the Tools class.
+        """Initialize the ToolManager class.
 
         Args:
             config: Database configuration.
@@ -117,14 +116,33 @@ class Tools:
             max_size=config.pool_max_size,
         )
         # Build tools mapping with dynamic description for execute_sql
+        # Filter tools based on access mode
+        base_tools = dict(self._TOOLS_BASE)
+
+        # USER modes: only basic tools
+        if self.access_mode.is_user_mode:
+            # Remove admin tools for USER modes
+            admin_tools = {
+                "list_schemas",
+                "analyze_workload_indexes",
+                "analyze_query_indexes",
+                "analyze_db_health",
+                "get_top_queries",
+            }
+            for tool_name in admin_tools:
+                if tool_name in base_tools:
+                    base_tools[tool_name] = {**base_tools[tool_name], "enabled": False}
+
+        # Determine execute_sql description
+        if self.access_mode == AccessMode.ADMIN_RW:
+            execute_sql_desc = DESC_EXECUTE_SQL_UNRESTRICTED
+        else:
+            execute_sql_desc = DESC_EXECUTE_SQL_RESTRICTED
+
         self._tools = {
-            **self._TOOLS_BASE,
+            **base_tools,
             "execute_sql": {
-                "description": (
-                    DESC_EXECUTE_SQL_UNRESTRICTED
-                    if self.access_mode == AccessMode.UNRESTRICTED
-                    else DESC_EXECUTE_SQL_RESTRICTED
-                ),
+                "description": execute_sql_desc,
                 "enabled": True,
             },
         }
@@ -137,7 +155,7 @@ class Tools:
         Returns:
             Self instance for use in async with statement.
         """
-        logger.debug("Entering Tools context manager")
+        logger.debug("Entering ToolManager context manager")
         return self
 
     async def __aexit__(
@@ -155,7 +173,7 @@ class Tools:
             exc_val: Exception value if an exception occurred.
             exc_tb: Exception traceback if an exception occurred.
         """
-        logger.debug("Exiting Tools context manager, closing database connections")
+        logger.debug("Exiting ToolManager context manager, closing database connections")
         if self.db_connection:
             try:
                 await self.db_connection.close()
@@ -191,13 +209,29 @@ class Tools:
 
         base_driver = SqlDriver(conn=self.db_connection)
 
-        if self.access_mode == AccessMode.RESTRICTED:
-            timeout = self.config.safe_sql_timeout
-            logger.debug(LOG_SAFE_SQL_DRIVER.format(timeout))
-            self._sql_driver = SafeSqlDriver(sql_driver=base_driver, timeout=timeout)
-        else:
+        # ADMIN_RW uses unrestricted SqlDriver
+        if self.access_mode == AccessMode.ADMIN_RW:
             logger.debug(LOG_UNRESTRICTED_SQL_DRIVER)
             self._sql_driver = base_driver
+        else:
+            # All other modes use SafeSqlDriver with different restrictions
+            timeout = self.config.safe_sql_timeout
+            allowed_schema = self.access_mode.allowed_schema
+            read_only = self.access_mode.is_read_only
+
+            logger.debug(
+                "Using SafeSqlDriver (mode=%s, allowed_schema=%s, read_only=%s, timeout=%ss)",
+                self.access_mode.value,
+                allowed_schema,
+                read_only,
+                timeout,
+            )
+            self._sql_driver = SafeSqlDriver(
+                sql_driver=base_driver,
+                timeout=timeout,
+                allowed_schema=allowed_schema,
+                read_only=read_only,
+            )
 
         return self._sql_driver
 
@@ -215,6 +249,17 @@ class Tools:
     async def list_schemas(self) -> ResponseType:
         """List all schemas in the database."""
         try:
+            # USER modes: return only public schema
+            if self.access_mode.is_user_mode:
+                return [
+                    {
+                        "schema_name": "public",
+                        "schema_owner": "postgres",  # Default owner, actual value may vary
+                        "schema_type": "User Schema",
+                    }
+                ]
+
+            # ADMIN modes: return all schemas
             sql_driver = self.sql_driver
             rows = await sql_driver.execute_query(QUERY_LIST_SCHEMAS)
             schemas = [row.cells for row in rows] if rows else []
@@ -233,6 +278,14 @@ class Tools:
     ) -> ResponseType:
         """List objects of a given type in a schema."""
         try:
+            # USER modes: force schema to public
+            if self.access_mode.is_user_mode:
+                if schema_name and schema_name.lower() != "public":
+                    return self._format_error_response(
+                        f"Access to schema '{schema_name}' is not allowed. Only 'public' schema is permitted."
+                    )
+                schema_name = "public"
+
             sql_driver = self.sql_driver
 
             if object_type in ("table", "view"):
@@ -309,6 +362,14 @@ class Tools:
     ) -> ResponseType:
         """Get detailed information about a database object."""
         try:
+            # USER modes: validate and force schema to public
+            if self.access_mode.is_user_mode:
+                if schema_name and schema_name.lower() != "public":
+                    return self._format_error_response(
+                        f"Access to schema '{schema_name}' is not allowed. Only 'public' schema is permitted."
+                    )
+                schema_name = "public"
+
             sql_driver = self.sql_driver
 
             if object_type in ("table", "view"):
@@ -585,7 +646,7 @@ class Tools:
         """Register all tools directly with FastMCP server using mcp.tool().
 
         Automatically registers all enabled methods listed in _tools with their
-        corresponding descriptions.
+        corresponding descriptions. Only enabled tools are registered.
 
         Args:
             mcp: FastMCP server instance to register tools with.
