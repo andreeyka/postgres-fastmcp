@@ -73,19 +73,31 @@ class ExtensionStatus:
     default_version: str | None
 
 
-def _get_connection_id(sql_driver: SqlDriver) -> str:
+def _get_connection_id(sql_driver: SqlDriver, _visited: set[int] | None = None) -> str:
     """Get a unique identifier for the database connection.
 
     Args:
         sql_driver: An instance of SqlDriver to get connection identifier from
+        _visited: Internal set to track visited objects and prevent infinite recursion
 
     Returns:
         Connection identifier string (connection_url, engine_url, or id-based fallback)
     """
+    if _visited is None:
+        _visited = set()
+    
+    # Prevent infinite recursion
+    driver_id = id(sql_driver)
+    if driver_id in _visited:
+        return f"driver_{driver_id}"
+    _visited.add(driver_id)
+    
     # Handle SafeSqlDriver wrapper - it stores the underlying driver in sql_driver attribute
     if hasattr(sql_driver, "sql_driver"):
-        # Recursively get connection ID from the underlying driver
-        return _get_connection_id(sql_driver.sql_driver)
+        underlying_driver = getattr(sql_driver, "sql_driver", None)
+        if underlying_driver is not None and underlying_driver is not sql_driver:
+            # Recursively get connection ID from the underlying driver
+            return _get_connection_id(underlying_driver, _visited)
 
     # If connection is a DbConnPool, use its connection_url
     if hasattr(sql_driver, "conn") and sql_driver.conn and isinstance(sql_driver.conn, DbConnPool) and sql_driver.conn.connection_url:

@@ -8,6 +8,12 @@
             "database_uri": "postgresql://postgres:postgres@postgres:5432/admin_rw_db",
             "streamable": false,
             "access_mode": "admin_rw"
+        },
+        "user_db": {
+            "database_uri": "postgresql://postgres:postgres@postgres:5432/user_db",
+            "streamable": false,
+            "access_mode": "user_ro",
+            "table_prefix": "app_"
         }
     },
     "host": "0.0.0.0",

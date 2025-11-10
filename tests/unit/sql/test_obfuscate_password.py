@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 from postgres_mcp.sql import obfuscate_password
 
 

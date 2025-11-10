@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 import asyncio
 from typing import Generator
 
@@ -6,6 +7,7 @@ from dotenv import load_dotenv
 from utils import create_postgres_container
 
 from postgres_mcp.sql import reset_postgres_version_cache
+
 
 load_dotenv()
 

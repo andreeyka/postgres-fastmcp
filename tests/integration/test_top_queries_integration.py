@@ -1,11 +1,12 @@
+# mypy: ignore-errors
 import logging
 
 import pytest
 import pytest_asyncio
 
 from postgres_mcp.sql import SqlDriver
-from postgres_mcp.top_queries import PG_STAT_STATEMENTS
-from postgres_mcp.top_queries import TopQueriesCalc
+from postgres_mcp.top_queries import PG_STAT_STATEMENTS, TopQueriesCalc
+
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +115,9 @@ async def test_get_top_queries_integration(local_sql_driver):
         await setup_test_data(local_sql_driver)
 
         # Verify pg_stat_statements has captured our queries
-        pg_stats = await local_sql_driver.execute_query("SELECT query FROM pg_stat_statements WHERE query LIKE '%CROSS JOIN%' LIMIT 1")
+        pg_stats = await local_sql_driver.execute_query(
+            "SELECT query FROM pg_stat_statements WHERE query LIKE '%CROSS JOIN%' LIMIT 1"
+        )
         if not pg_stats or len(pg_stats) == 0:
             pytest.skip("pg_stat_statements did not capture the CROSS JOIN query")
 

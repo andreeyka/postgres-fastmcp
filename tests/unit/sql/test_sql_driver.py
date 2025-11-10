@@ -1,13 +1,10 @@
+# mypy: ignore-errors
 # ruff: noqa: B017
-from unittest.mock import AsyncMock
-from unittest.mock import MagicMock
-from unittest.mock import call
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
-from postgres_mcp.sql import DbConnPool
-from postgres_mcp.sql import SqlDriver
+from postgres_mcp.sql import DbConnPool, SqlDriver
 
 
 class AsyncContextManagerMock(AsyncMock):
@@ -242,7 +239,6 @@ async def test_execute_query_no_results(mock_connection):
             await cursor.execute("COMMIT")
 
         # Return None for no results
-        return None
 
     # Must match the parameter names from the original method
     driver._execute_with_connection = mock_impl  # type: ignore

@@ -350,8 +350,28 @@ Ask your AI agent:
 
 ### Running Tests
 
+**Prerequisites:**
+- Docker must be installed and running
+- Docker images will be built automatically on first test run, or you can prepare them manually:
+
+```bash
+# Prepare Docker images for testing (optional, but recommended for faster test runs)
+uv run python tests/prepare_docker_images.py
+```
+
+**Run all tests:**
 ```bash
 uv run python -m pytest
+```
+
+**Run specific test file:**
+```bash
+uv run python -m pytest tests/unit/index/test_dta_calc.py -v
+```
+
+**Run tests with real database (integration tests):**
+```bash
+uv run python -m pytest tests/integration/ -v
 ```
 
 ### Code Formatting

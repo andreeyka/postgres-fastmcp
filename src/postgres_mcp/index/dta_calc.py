@@ -882,6 +882,8 @@ class ConditionColumnCollector(ColumnCollector):
                 permissive behavior (returns True for all checks).
         """
         super().__init__(column_cache=column_cache)
+        # Override column_cache to preserve None (base class converts None to {})
+        self.column_cache = column_cache
         self.condition_columns: dict[str, set[str]] = {}  # Specifically for columns in conditions
         self.in_condition = False  # Flag to track if we're inside a condition
 
@@ -1077,13 +1079,17 @@ class ConditionColumnCollector(ColumnCollector):
             column: Column name.
 
         Returns:
-            True if column exists in the table according to column_cache,
-            False otherwise. If column_cache is empty, returns False to avoid
-            false positives (safer than returning True for all checks).
+            True if column exists in the table according to column_cache.
+            If column_cache is None, returns True (permissive mode).
+            If column_cache is empty dict, returns False (strict mode).
         """
+        if self.column_cache is None:
+            # If cache is not provided (None), use permissive behavior
+            # This allows the collector to work without a cache
+            return True
         if not self.column_cache:
-            # If cache is not provided, return False for safety
-            # This prevents adding non-existent columns
+            # If cache is empty dict, return False for safety
+            # This prevents adding non-existent columns when cache was attempted but failed
             return False
 
         # Check if table exists in cache

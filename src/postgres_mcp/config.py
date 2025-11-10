@@ -48,6 +48,24 @@ class DatabaseConfig(BaseModel):
     safe_sql_timeout: int = Field(
         default=30, description="Timeout in seconds for SafeSqlDriver (for non-ADMIN_RW modes)"
     )
+    table_prefix: str | None = Field(
+        default=None,
+        description=(
+            "Optional table name prefix for user_* modes. "
+            "If set, only tables/views/sequences with names starting with this prefix are accessible. "
+            "Works only for USER_RO and USER_RW access modes. "
+            "Ignored for admin modes."
+        ),
+    )
+    tool_name_prefix: bool = Field(
+        default=True,
+        description=(
+            "If True, adds prefix to tool names based on database server name. "
+            "This prevents tool name conflicts when multiple MCP servers are connected to the same agent. "
+            "For example, if server name is 'app1', tool 'list_schemas' becomes 'app1_list_schemas'. "
+            "If False, tools keep their original names."
+        ),
+    )
 
 
 class Settings(BaseSettings):

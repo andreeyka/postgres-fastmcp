@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 import logging
 import os
 import time
@@ -8,8 +9,8 @@ import pytest_asyncio
 
 from postgres_mcp.index.dta_calc import DatabaseTuningAdvisor
 from postgres_mcp.index.index_opt_base import IndexTuningResult
-from postgres_mcp.sql import DbConnPool
-from postgres_mcp.sql import SqlDriver
+from postgres_mcp.sql import DbConnPool, SqlDriver
+
 
 logger = logging.getLogger(__name__)
 
@@ -155,14 +156,12 @@ async def create_dta(db_connection):
     await db_connection.execute_query("SELECT hypopg_reset()", force_readonly=False)
 
     # Create DTA with reasonable settings for testing
-    dta = DatabaseTuningAdvisor(
+    return DatabaseTuningAdvisor(
         sql_driver=db_connection,
         budget_mb=100,
         max_runtime_seconds=120,
         max_index_width=3,
     )
-
-    return dta
 
 
 @pytest.mark.asyncio
@@ -453,8 +452,12 @@ async def test_join_order_benchmark(db_connection, setup_test_tables, create_dta
             # We should find at least 1 of the expected patterns
             # Relaxed assertion - just need one useful recommendation
             if found_patterns == 0:
-                logger.warning(f"No expected patterns found. Recommendations: {[f'{r.table}.{r.columns}' for r in session.recommendations]}")
-            assert found_patterns >= 1, f"Found only {found_patterns} out of {len(expected_patterns)} expected index patterns"
+                logger.warning(
+                    f"No expected patterns found. Recommendations: {[f'{r.table}.{r.columns}' for r in session.recommendations]}"
+                )
+            assert found_patterns >= 1, (
+                f"Found only {found_patterns} out of {len(expected_patterns)} expected index patterns"
+            )
 
             # Log recommendations for debugging
             logger.info("\nRecommended indexes for JOB workload:")
@@ -548,7 +551,7 @@ async def test_join_order_benchmark(db_connection, setup_test_tables, create_dta
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="Skipping multi-column indexes test for now")
+@retry(max_attempts=3, delay=2)  # Add retry decorator for flaky test
 async def test_multi_column_indexes(db_connection, setup_test_tables, create_dta):
     """Test that DTA can recommend multi-column indexes when appropriate."""
     dta = create_dta
@@ -792,13 +795,17 @@ async def test_multi_column_indexes(db_connection, setup_test_tables, create_dta
     # Print all recommendations for debugging - both single and multi-column
     logger.debug("\nAll index recommendations:")
     for rec in session.recommendations:
-        logger.debug(f"{rec.definition} (benefit: {rec.progressive_improvement_multiple:.2f}x, size: {rec.estimated_size_bytes / 1024:.2f} KB)")
+        logger.debug(
+            f"{rec.definition} (benefit: {rec.progressive_improvement_multiple:.2f}x, size: {rec.estimated_size_bytes / 1024:.2f} KB)"
+        )
 
     # Print multi-column recommendations separately
     logger.debug("\nMulti-column index recommendations:")
     multi_column_recs = [rec for rec in session.recommendations if len(rec.columns) >= 2]
     for rec in multi_column_recs:
-        logger.debug(f"{rec.definition} (benefit: {rec.progressive_improvement_multiple:.2f}x, size: {rec.estimated_size_bytes / 1024:.2f} KB)")
+        logger.debug(
+            f"{rec.definition} (benefit: {rec.progressive_improvement_multiple:.2f}x, size: {rec.estimated_size_bytes / 1024:.2f} KB)"
+        )
 
     # Test performance improvement with recommended indexes
     if not multi_column_recs:
@@ -1058,7 +1065,9 @@ async def test_diminishing_returns(db_connection, create_dta):
         dta.min_time_improvement = 0.01
 
         # Analyze with 1% threshold
-        session_with_low_threshold = await dta.analyze_workload(query_list=[q["query"] for q in queries], min_calls=1, min_avg_time_ms=0.1)
+        session_with_low_threshold = await dta.analyze_workload(
+            query_list=[q["query"] for q in queries], min_calls=1, min_avg_time_ms=0.1
+        )
 
         # With lower threshold, we should get more recommendations
         # Allow equal in case the workload doesn't generate more recommendations
@@ -1168,7 +1177,7 @@ async def test_pareto_optimization_basic(db_connection, create_dta):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="Skipping storage cost tradeoff test for now")
+@retry(max_attempts=3, delay=2)  # Add retry decorator for flaky test
 async def test_storage_cost_tradeoff(db_connection, create_dta):
     """Test that the DTA correctly balances performance gains against storage costs."""
     dta = create_dta
@@ -1269,7 +1278,9 @@ async def test_storage_cost_tradeoff(db_connection, create_dta):
     # This should favor small indexes with good benefit/cost ratio
     dta.pareto_alpha = 5.0  # Very sensitive to storage costs
 
-    session_storage_sensitive = await dta.analyze_workload(query_list=[q["query"] for q in queries], min_calls=1, min_avg_time_ms=1.0)
+    session_storage_sensitive = await dta.analyze_workload(
+        query_list=[q["query"] for q in queries], min_calls=1, min_avg_time_ms=1.0
+    )
 
     # Check that we have recommendations
     assert isinstance(session_storage_sensitive, IndexTuningResult)
@@ -1286,7 +1297,9 @@ async def test_storage_cost_tradeoff(db_connection, create_dta):
     # This should include more indexes, even larger ones
     dta.pareto_alpha = 0.5  # Less sensitive to storage costs
 
-    session_performance_focused = await dta.analyze_workload(query_list=[q["query"] for q in queries], min_calls=1, min_avg_time_ms=1.0)
+    session_performance_focused = await dta.analyze_workload(
+        query_list=[q["query"] for q in queries], min_calls=1, min_avg_time_ms=1.0
+    )
 
     # Should include more recommendations
     assert len(session_performance_focused.recommendations) >= len(session_storage_sensitive.recommendations)
@@ -1306,7 +1319,7 @@ async def test_storage_cost_tradeoff(db_connection, create_dta):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="Skipping pareto optimal index selection test for now")
+@retry(max_attempts=3, delay=2)  # Add retry decorator for flaky test
 async def test_pareto_optimal_index_selection(db_connection, create_dta):
     """Test that the DTA correctly implements Pareto optimal index selection."""
     dta = create_dta
@@ -1384,7 +1397,9 @@ async def test_pareto_optimal_index_selection(db_connection, create_dta):
 
     # Verify the recommendations follow Pareto principles
     # 1. col1 (high benefit, small size) should be recommended
-    assert any("col1" in rec.columns for rec in session.recommendations), "col1 should be recommended (high benefit/size ratio)"
+    assert any("col1" in rec.columns for rec in session.recommendations), (
+        "col1 should be recommended (high benefit/size ratio)"
+    )
 
     # 2. The large, low-benefit index should not be recommended or be low priority
     col3_recommendations = [rec for rec in session.recommendations if "col3" in rec.columns]

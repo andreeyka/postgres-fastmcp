@@ -1,9 +1,11 @@
+# mypy: ignore-errors
 import logging
 
 import pytest
 
 from postgres_mcp.database_health import DatabaseHealthTool
 from postgres_mcp.sql import SqlDriver
+
 
 logger = logging.getLogger(__name__)
 

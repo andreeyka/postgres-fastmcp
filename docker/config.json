@@ -7,7 +7,8 @@
         "user_ro_db": {
             "database_uri": "postgresql://user_ro:password@postgres:5432/user_ro_db",
             "streamable": false,
-            "access_mode": "user_ro"
+            "access_mode": "user_ro",
+            "table_prefix": "app_"
         },
         "user_rw_db": {
             "database_uri": "postgresql://user_rw:password@postgres:5432/user_rw_db",

@@ -1,7 +1,6 @@
+# mypy: ignore-errors
 # ruff: noqa: B017
-from unittest.mock import AsyncMock
-from unittest.mock import MagicMock
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -74,14 +73,13 @@ async def test_pool_connect_with_retry(mock_pool):
         if self._attempt_count == 1:
             # First attempt fails
             raise Exception("Connection error")
-        else:
-            # Second attempt succeeds
-            self.pool = mock_pool
-            self._is_valid = True
-            return mock_pool
+        # Second attempt succeeds
+        self.pool = mock_pool
+        self._is_valid = True
+        return mock_pool
 
     with patch("postgres_mcp.sql.sql_driver.AsyncConnectionPool", return_value=mock_pool):
-        with patch("postgres_mcp.server.asyncio.sleep", AsyncMock()) as mock_sleep:
+        with patch("asyncio.sleep", AsyncMock()) as mock_sleep:
             with patch.object(DbConnPool, "pool_connect", mock_pool_connect):
                 db_pool = DbConnPool("postgresql://user:pass@localhost/db")
 

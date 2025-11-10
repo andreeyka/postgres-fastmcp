@@ -9,17 +9,19 @@ from .extension_utils import (
     reset_postgres_version_cache,
 )
 from .index import IndexDefinition
-from .safe_sql import SafeSqlDriver
-from .sql_driver import DbConnPool, SqlDriver, obfuscate_password
+from .safe_sql import SafeSqlConfig, SafeSqlDriver
+from .sql_driver import DbConnPool, SqlDriver, SqlDriverConfig, obfuscate_password
 
 
 __all__ = [
     "ColumnCollector",
     "DbConnPool",
     "IndexDefinition",
+    "SafeSqlConfig",
     "SafeSqlDriver",
     "SqlBindParams",
     "SqlDriver",
+    "SqlDriverConfig",
     "TableAliasVisitor",
     "check_extension",
     "check_hypopg_installation_status",

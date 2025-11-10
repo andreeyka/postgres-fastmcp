@@ -109,9 +109,9 @@ class TopQueriesCalc:
 
             result = f"Top {len(slow_queries)} slowest queries by {criteria}:\n"
             result += str(slow_queries)
-        except Exception:
+        except Exception as e:
             logger.exception("Error getting slow queries")
-            return "Error getting slow queries"
+            return f"Error getting slow queries: {e}"
         else:
             return result
 

@@ -16,7 +16,13 @@ from postgres_mcp.index.index_opt_base import MAX_NUM_INDEX_TUNING_QUERIES, Inde
 from postgres_mcp.index.llm_opt import LLMOptimizerTool
 from postgres_mcp.index.presentation import TextPresentation
 from postgres_mcp.logger import get_logger
-from postgres_mcp.sql import DbConnPool, SafeSqlDriver, SqlDriver, check_hypopg_installation_status
+from postgres_mcp.sql import (
+    DbConnPool,
+    SafeSqlConfig,
+    SafeSqlDriver,
+    SqlDriver,
+    check_hypopg_installation_status,
+)
 from postgres_mcp.top_queries import TopQueriesCalc
 
 from .constants import (
@@ -210,23 +216,25 @@ class ToolManager:
             self._sql_driver = base_driver
         else:
             # All other modes use SafeSqlDriver with different restrictions
-            timeout = self.config.safe_sql_timeout
-            allowed_schema = self.access_mode.allowed_schema
-            read_only = self.access_mode.is_read_only
+            config = SafeSqlConfig(
+                timeout=self.config.safe_sql_timeout,
+                allowed_schema=self.access_mode.allowed_schema,
+                read_only=self.access_mode.is_read_only,
+                query_tag=settings.name,
+                table_prefix=self.config.table_prefix if self.access_mode.is_user_mode else None,
+            )
 
             logger.debug(
-                "Using SafeSqlDriver (mode=%s, allowed_schema=%s, read_only=%s, timeout=%ss)",
+                "Using SafeSqlDriver (mode=%s, allowed_schema=%s, read_only=%s, timeout=%ss, table_prefix=%s)",
                 self.access_mode.value,
-                allowed_schema,
-                read_only,
-                timeout,
+                config.allowed_schema,
+                config.read_only,
+                config.timeout,
+                config.table_prefix,
             )
             self._sql_driver = SafeSqlDriver(
                 sql_driver=base_driver,
-                timeout=timeout,
-                allowed_schema=allowed_schema,
-                read_only=read_only,
-                query_tag=settings.name,
+                config=config,
             )
 
         return self._sql_driver
@@ -309,6 +317,14 @@ class ToolManager:
                     if rows
                     else []
                 )
+                # Filter by table_prefix in user mode
+                if self.access_mode.is_user_mode and self.config.table_prefix:
+                    prefix_lower = self.config.table_prefix.lower()
+                    objects = [
+                        obj
+                        for obj in objects
+                        if obj["name"].lower().startswith(prefix_lower)
+                    ]
 
             elif object_type == "sequence":
                 rows = await SafeSqlDriver.execute_param_query(
@@ -328,6 +344,14 @@ class ToolManager:
                     if rows
                     else []
                 )
+                # Filter by table_prefix in user mode
+                if self.access_mode.is_user_mode and self.config.table_prefix:
+                    prefix_lower = self.config.table_prefix.lower()
+                    objects = [
+                        obj
+                        for obj in objects
+                        if obj["name"].lower().startswith(prefix_lower)
+                    ]
 
             elif object_type == "extension":
                 # Extensions are not schema-specific
@@ -737,6 +761,8 @@ class ToolManager:
             prefix: Optional prefix for the database server. If provided, adds prefix
                 information to tool descriptions to indicate which database the tool
                 belongs to and that tools with the same prefix should be used together.
+                If tool_name_prefix is True in config, also adds prefix to tool names
+                (e.g., 'list_schemas' becomes 'app1_list_schemas').
 
         Returns:
             Number of registered tools.
@@ -750,6 +776,11 @@ class ToolManager:
             method = getattr(self, method_name)
             base_description = tool_config["description"]
 
+            # Determine tool name: add prefix if enabled and prefix is provided
+            tool_name: str | None = None
+            if prefix and self.config.tool_name_prefix:
+                tool_name = f"{prefix}_{method_name}"
+
             # Add prefix information to description if prefix is provided
             if prefix:
                 prefix_info = (
@@ -762,7 +793,11 @@ class ToolManager:
             else:
                 description = base_description
 
-            mcp.tool(method, description=description)
+            # Register tool with optional custom name
+            if tool_name:
+                mcp.tool(method, name=tool_name, description=description)
+            else:
+                mcp.tool(method, description=description)
             registered_count += 1
 
         return registered_count

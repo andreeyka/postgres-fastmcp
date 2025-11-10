@@ -21,6 +21,17 @@ else:
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class SqlDriverConfig:
+    """Базовая конфигурация для SqlDriver и его подклассов.
+
+    Attributes:
+        query_tag: Тег для добавления к SQL-запросам для идентификации в логах и мониторинге.
+    """
+
+    query_tag: str = "postgres-fastmcp"
+
+
 class ConnectionFailedError(ValueError):
     """Exception for database connection errors."""
 

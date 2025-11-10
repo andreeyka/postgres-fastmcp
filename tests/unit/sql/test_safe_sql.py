@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 from unittest.mock import AsyncMock, Mock, call
 
 import pytest
@@ -5,7 +6,7 @@ import pytest_asyncio
 from psycopg.sql import SQL, Literal
 
 from postgres_mcp.config import settings
-from postgres_mcp.sql import SafeSqlDriver, SqlDriver
+from postgres_mcp.sql import SafeSqlConfig, SafeSqlDriver, SqlDriver
 
 
 @pytest_asyncio.fixture
@@ -830,4 +831,51 @@ async def test_query_with_whitespace(safe_driver, mock_sql_driver):
     await safe_driver.execute_query(query)
     mock_sql_driver.execute_query.assert_awaited_once_with(
         f"/* {settings.name} */ " + query, params=None, force_readonly=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_information_schema_schemata_blocked_in_user_mode(mock_sql_driver):
+    """Test that access to information_schema.schemata is blocked in user mode"""
+    config = SafeSqlConfig(allowed_schema="public", read_only=True)
+    user_driver = SafeSqlDriver(mock_sql_driver, config=config)
+
+    query = "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name"
+    with pytest.raises(ValueError) as exc_info:
+        await user_driver.execute_query(query)
+    # Check that the error message contains the expected text
+    # The original error is wrapped in "Error validating query: ..."
+    error_msg = str(exc_info.value)
+    # Check the cause if available
+    if exc_info.value.__cause__:
+        error_msg = str(exc_info.value.__cause__)
+    assert "information_schema.schemata" in error_msg
+    assert "not allowed in user mode" in error_msg
+
+
+@pytest.mark.asyncio
+async def test_information_schema_schemata_allowed_in_admin_mode(mock_sql_driver):
+    """Test that access to information_schema.schemata is allowed in admin mode"""
+    config = SafeSqlConfig(allowed_schema=None, read_only=True)
+    admin_driver = SafeSqlDriver(mock_sql_driver, config=config)
+
+    query = "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name"
+    await admin_driver.execute_query(query)
+    mock_sql_driver.execute_query.assert_awaited_once_with(
+        f"/* {settings.name} */ " + query, params=None, force_readonly=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_information_schema_tables_allowed_in_user_mode(mock_sql_driver):
+    """Test that access to other information_schema tables (like tables) is still allowed in user mode"""
+    config = SafeSqlConfig(allowed_schema="public", read_only=True)
+    user_driver = SafeSqlDriver(mock_sql_driver, config=config)
+
+    query = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+    await user_driver.execute_query(query)
+    mock_sql_driver.execute_query.assert_awaited_once_with(
+        f"/* {settings.name} */ SET LOCAL search_path = public; {query}",
+        params=None,
+        force_readonly=True,
     )

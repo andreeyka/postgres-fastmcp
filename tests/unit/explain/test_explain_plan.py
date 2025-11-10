@@ -1,13 +1,12 @@
+# mypy: ignore-errors
 import json
-from unittest.mock import AsyncMock
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
 
 from postgres_mcp.common import ErrorResult
-from postgres_mcp.explain import ExplainPlanArtifact
-from postgres_mcp.explain import ExplainPlanTool
+from postgres_mcp.explain import ExplainPlanArtifact, ExplainPlanTool
 
 
 class MockCell:
@@ -31,7 +30,7 @@ async def test_explain_plan_tool_initialization(mock_sql_driver):
 
 
 @pytest.mark.asyncio
-async def test_has_bind_variables():
+async def test_has_bind_variables() -> None:
     """Test the _has_bind_variables method."""
     tool = ExplainPlanTool(sql_driver=MagicMock())
 
@@ -90,10 +89,8 @@ async def test_explain_success(mock_sql_driver):
 
 
 @pytest.mark.asyncio
-async def test_explain_with_bind_variables(mock_sql_driver):
-    """Test explain with bind variables."""
-    # Prepare mock response for PostgreSQL version check
-    version_response = [MockCell({"server_version": "16.0"})]
+async def test_explain_with_bind_variables(mock_sql_driver, monkeypatch):
+    """Test explain with bind variables on PostgreSQL 16+ uses GENERIC_PLAN."""
     # Prepare mock response for explain query
     plan_data = {
         "Plan": {
@@ -106,12 +103,21 @@ async def test_explain_with_bind_variables(mock_sql_driver):
         }
     }
 
-    # Set up the mock to return different responses for different queries
-    def side_effect(query):
-        if query == "SHOW server_version":
-            return version_response
-        else:
+    # Mock check_postgres_version_requirement to return True (PostgreSQL 16+)
+    async def mock_check_version(_sql_driver, *, min_version, feature_name):
+        return (True, f"PostgreSQL version 16 meets the requirement for {feature_name}")
+
+    monkeypatch.setattr(
+        "postgres_mcp.explain.explain_plan.check_postgres_version_requirement",
+        mock_check_version,
+    )
+
+    # Set up the mock to return plan data for EXPLAIN queries
+    async def side_effect(query, *args, **kwargs):
+        query_str = str(query)
+        if "EXPLAIN" in query_str:
             return [MockCell({"QUERY PLAN": [plan_data]})]
+        return None
 
     mock_sql_driver.execute_query.side_effect = side_effect
 
@@ -129,15 +135,13 @@ async def test_explain_with_bind_variables(mock_sql_driver):
             break
 
     assert explain_call is not None
+    # Verify that GENERIC_PLAN is used for PostgreSQL 16+ with bind variables
     assert "EXPLAIN (FORMAT JSON, GENERIC_PLAN) SELECT * FROM users WHERE id = $1" in explain_call
 
 
 @pytest.mark.asyncio
 async def test_explain_with_bind_variables_pg15(mock_sql_driver, monkeypatch):
-    """Test explain with bind variables on PostgreSQL < 16."""
-    # Prepare mock response for PostgreSQL version check
-    version_response = [MockCell({"server_version": "15.4"})]
-
+    """Test explain with bind variables on PostgreSQL < 16 uses parameter replacement."""
     # Prepare plan data for the replaced parameter query
     plan_data = {
         "Plan": {
@@ -150,23 +154,29 @@ async def test_explain_with_bind_variables_pg15(mock_sql_driver, monkeypatch):
         }
     }
 
-    # Mock the SqlBindParams class
+    # Mock check_postgres_version_requirement to return False (PostgreSQL < 16)
+    async def mock_check_version(_sql_driver, *, min_version, feature_name):
+        return (False, f"PostgreSQL version 15 does not meet the requirement for {feature_name}")
+
+    monkeypatch.setattr(
+        "postgres_mcp.explain.explain_plan.check_postgres_version_requirement",
+        mock_check_version,
+    )
+
+    # Mock the SqlBindParams class to replace parameters
     class MockSqlBindParams:
         def __init__(self, sql_driver):
             self.sql_driver = sql_driver
 
-        async def replace_parameters(self, query):
+        async def replace_parameters(self, _query):
             return "SELECT * FROM users WHERE id = 42"  # Replaced query
 
-    # The correct import path for monkeypatching
     monkeypatch.setattr("postgres_mcp.explain.explain_plan.SqlBindParams", MockSqlBindParams)
 
-    # Set up the mock to return different responses for different queries
-    def side_effect(query):
-        if query == "SHOW server_version":
-            return version_response
-        elif "EXPLAIN" in query and "id = 42" in query:
-            # For the parameter-replaced EXPLAIN query, return mock results
+    # Set up the mock to return plan data for EXPLAIN queries with replaced parameters
+    async def side_effect(query, *args, **kwargs):
+        query_str = str(query)
+        if "EXPLAIN" in query_str and "id = 42" in query_str:
             return [MockCell({"QUERY PLAN": [plan_data]})]
         return None
 
@@ -175,28 +185,21 @@ async def test_explain_with_bind_variables_pg15(mock_sql_driver, monkeypatch):
     tool = ExplainPlanTool(sql_driver=mock_sql_driver)
     result = await tool.explain("SELECT * FROM users WHERE id = $1")
 
-    # We now expect a successful result with parameter replacement
-    if isinstance(result, ErrorResult):
-        print(f"Got error: {result.value}")
+    # Verify successful result with parameter replacement
     assert isinstance(result, ExplainPlanArtifact)
 
-    # Verify that the version check was called
-    version_call = None
+    # Find the EXPLAIN call in the call history
     explain_call = None
-
     for call in mock_sql_driver.execute_query.call_args_list:
-        if "server_version" in call[0][0]:
-            version_call = call
-        elif "EXPLAIN" in call[0][0]:
-            explain_call = call
+        if "EXPLAIN" in call[0][0]:
+            explain_call = call[0][0]
+            break
 
-    assert version_call is not None
     assert explain_call is not None
-
     # Make sure GENERIC_PLAN is NOT in the query - we should be using replaced values
-    assert "GENERIC_PLAN" not in explain_call[0][0]
+    assert "GENERIC_PLAN" not in explain_call
     # Verify the parameters were replaced
-    assert "id = 42" in explain_call[0][0]
+    assert "id = 42" in explain_call
 
 
 @pytest.mark.asyncio
@@ -220,20 +223,29 @@ async def test_explain_analyze_with_bind_variables(mock_sql_driver, monkeypatch)
         "Execution Time": 1.30,
     }
 
+    # Mock check_postgres_version_requirement to return False (forces parameter replacement)
+    async def mock_check_version(_sql_driver, *, min_version, feature_name):
+        return (False, f"PostgreSQL version 15 does not meet the requirement for {feature_name}")
+
+    monkeypatch.setattr(
+        "postgres_mcp.explain.explain_plan.check_postgres_version_requirement",
+        mock_check_version,
+    )
+
     # Mock the SqlBindParams class
     class MockSqlBindParams:
         def __init__(self, sql_driver):
             self.sql_driver = sql_driver
 
-        async def replace_parameters(self, query):
+        async def replace_parameters(self, _query):
             return "SELECT * FROM users WHERE id = 42"  # Replaced query
 
-    # The correct import path for monkeypatching
     monkeypatch.setattr("postgres_mcp.explain.explain_plan.SqlBindParams", MockSqlBindParams)
 
     # Set up the mock to return mock plan for the modified query
-    def side_effect(query):
-        if "EXPLAIN" in query and "id = 42" in query:
+    async def side_effect(query, *args, **kwargs):
+        query_str = str(query)
+        if "EXPLAIN" in query_str and "id = 42" in query_str:
             return [MockCell({"QUERY PLAN": [plan_data]})]
         return None
 
@@ -243,8 +255,6 @@ async def test_explain_analyze_with_bind_variables(mock_sql_driver, monkeypatch)
     result = await tool.explain_analyze("SELECT * FROM users WHERE id = $1")
 
     # Should return successful result with replaced parameters
-    if isinstance(result, ErrorResult):
-        print(f"Got error: {result.value}")
     assert isinstance(result, ExplainPlanArtifact)
 
     # Verify that the query was executed with ANALYZE but not GENERIC_PLAN
@@ -349,10 +359,7 @@ async def test_explain_with_empty_plan_data(mock_sql_driver):
 
 @pytest.mark.asyncio
 async def test_explain_with_like_and_bind_variables_pg16(mock_sql_driver, monkeypatch):
-    """Test explain with LIKE and bind variables on PostgreSQL 16."""
-    # Prepare mock response for PostgreSQL version check
-    version_response = [MockCell({"server_version": "16.0"})]
-
+    """Test explain with LIKE and bind variables on PostgreSQL 16 uses parameter replacement."""
     # Prepare plan data for the replaced parameter query
     plan_data = {
         "Plan": {
@@ -365,23 +372,30 @@ async def test_explain_with_like_and_bind_variables_pg16(mock_sql_driver, monkey
         }
     }
 
+    # Mock check_postgres_version_requirement to return True (PostgreSQL 16+)
+    # But LIKE expressions force parameter replacement anyway
+    async def mock_check_version(_sql_driver, *, min_version, feature_name):
+        return (True, f"PostgreSQL version 16 meets the requirement for {feature_name}")
+
+    monkeypatch.setattr(
+        "postgres_mcp.explain.explain_plan.check_postgres_version_requirement",
+        mock_check_version,
+    )
+
     # Mock the SqlBindParams class
     class MockSqlBindParams:
         def __init__(self, sql_driver):
             self.sql_driver = sql_driver
 
-        async def replace_parameters(self, query):
+        async def replace_parameters(self, _query):
             return "SELECT * FROM users WHERE name LIKE '%John%'"  # Replaced query
 
-    # The correct import path for monkeypatching
     monkeypatch.setattr("postgres_mcp.explain.explain_plan.SqlBindParams", MockSqlBindParams)
 
-    # Set up the mock to return different responses for different queries
-    def side_effect(query):
-        if query == "SHOW server_version":
-            return version_response
-        elif "EXPLAIN" in query and "LIKE '%John%'" in query:
-            # For the parameter-replaced EXPLAIN query, return mock results
+    # Set up the mock to return plan data for EXPLAIN queries with replaced parameters
+    async def side_effect(query, *args, **kwargs):
+        query_str = str(query)
+        if "EXPLAIN" in query_str and "LIKE '%John%'" in query_str:
             return [MockCell({"QUERY PLAN": [plan_data]})]
         return None
 
@@ -391,27 +405,21 @@ async def test_explain_with_like_and_bind_variables_pg16(mock_sql_driver, monkey
     result = await tool.explain("SELECT * FROM users WHERE name LIKE $1")
 
     # We expect a successful result with parameter replacement despite PostgreSQL 16
-    if isinstance(result, ErrorResult):
-        print(f"Got error: {result.value}")
+    # (because LIKE expressions force parameter replacement)
     assert isinstance(result, ExplainPlanArtifact)
 
-    # Verify that the version check was called
-    version_call = None
+    # Find the EXPLAIN call in the call history
     explain_call = None
-
     for call in mock_sql_driver.execute_query.call_args_list:
-        if "server_version" in call[0][0]:
-            version_call = call
-        elif "EXPLAIN" in call[0][0]:
-            explain_call = call
+        if "EXPLAIN" in call[0][0]:
+            explain_call = call[0][0]
+            break
 
-    assert version_call is not None
     assert explain_call is not None
-
     # Make sure GENERIC_PLAN is NOT in the query - we should be using replaced values
-    assert "GENERIC_PLAN" not in explain_call[0][0]
+    assert "GENERIC_PLAN" not in explain_call
     # Verify the parameters were replaced
-    assert "LIKE '%John%'" in explain_call[0][0]
+    assert "LIKE '%John%'" in explain_call
 
 
 @pytest.mark.asyncio

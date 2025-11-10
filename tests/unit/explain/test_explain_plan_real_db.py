@@ -1,12 +1,13 @@
+# mypy: ignore-errors
 import json
 import logging
 
 import pytest
 
 from postgres_mcp.common import ErrorResult
-from postgres_mcp.explain import ExplainPlanArtifact
-from postgres_mcp.explain import ExplainPlanTool
+from postgres_mcp.explain import ExplainPlanArtifact, ExplainPlanTool
 from postgres_mcp.sql import SqlDriver
+
 
 logger = logging.getLogger(__name__)
 

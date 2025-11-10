@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any, ClassVar, LiteralString
 
 import pglast
@@ -81,10 +82,30 @@ from pglast.ast import (
 from pglast.enums import A_Expr_Kind
 from psycopg.sql import SQL, Composable, Literal
 
-from .sql_driver import SqlDriver
+from .sql_driver import SqlDriver, SqlDriverConfig
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class SafeSqlConfig(SqlDriverConfig):
+    """Конфигурация для SafeSqlDriver.
+
+    Attributes:
+        timeout: Опциональный таймаут в секундах для выполнения запросов.
+        allowed_schema: Разрешенное имя схемы (например, 'public'). None означает, что все схемы разрешены.
+        read_only: Если True, разрешены только операции чтения. Если False, DML (INSERT/UPDATE/DELETE)
+            разрешен, но DDL все еще запрещен.
+        query_tag: Тег для добавления к SQL-запросам для идентификации в логах и мониторинге.
+        table_prefix: Опциональный префикс имени таблицы. Если установлен и allowed_schema установлен
+            (режим пользователя), доступны только таблицы с именами, начинающимися с этого префикса.
+    """
+
+    timeout: float | None = None
+    allowed_schema: str | None = None
+    read_only: bool = True
+    table_prefix: str | None = None
 
 
 class SafeSqlDriver(SqlDriver):
@@ -866,27 +887,25 @@ class SafeSqlDriver(SqlDriver):
     def __init__(
         self,
         sql_driver: SqlDriver,
-        timeout: float | None = None,
-        allowed_schema: str | None = None,
-        *,
-        read_only: bool = True,
-        query_tag: str = "postgres-fastmcp",
+        config: SafeSqlConfig | None = None,
     ) -> None:
-        """Initialize with an underlying SQL driver and optional timeout.
+        """Initialize with an underlying SQL driver and configuration.
 
         Args:
             sql_driver: The underlying SQL driver to wrap
-            timeout: Optional timeout in seconds for query execution
-            allowed_schema: Allowed schema name (e.g., 'public'). None means all schemas allowed.
-            read_only: If True, only read-only operations are allowed. If False, DML (INSERT/UPDATE/DELETE)
-                is allowed but DDL is still prohibited.
-            query_tag: Tag to add to SQL queries for identification in logs and monitoring.
+            config: Конфигурация SafeSqlDriver. Если не указана, используются значения по умолчанию.
         """
         self.sql_driver = sql_driver
-        self.timeout = timeout
-        self.allowed_schema = allowed_schema
-        self.read_only = read_only
-        self.query_tag = query_tag
+
+        # Используем переданный config или создаем дефолтный
+        if config is None:
+            config = SafeSqlConfig()
+
+        self.timeout = config.timeout
+        self.allowed_schema = config.allowed_schema
+        self.read_only = config.read_only
+        self.query_tag = config.query_tag
+        self.table_prefix = config.table_prefix
 
     def _validate_schema_access(self, range_var: RangeVar) -> None:
         """Check that the table belongs to an allowed schema.
@@ -895,7 +914,7 @@ class SafeSqlDriver(SqlDriver):
             range_var: RangeVar node representing the table.
 
         Raises:
-            ValueError: If the table schema is not allowed.
+            ValueError: If the table schema is not allowed or table name doesn't match prefix.
         """
         if not self.allowed_schema:
             # If allowed_schema is not set (ADMIN mode), allow all
@@ -903,24 +922,65 @@ class SafeSqlDriver(SqlDriver):
 
         schemaname = range_var.schemaname
 
-        # Allowed system schemas (always available)
-        allowed_system_schemas = {"pg_catalog", "information_schema"}
-
         if schemaname is None:
             # Implicit schema (without schema specification) - allow
             # PostgreSQL uses search_path, which will be set to public
+            # Still need to check table prefix if set
+            if (
+                self.table_prefix
+                and range_var.relname
+                and not range_var.relname.lower().startswith(self.table_prefix.lower())
+            ):
+                error_msg = (
+                    f"Access to table '{range_var.relname}' is not allowed. "
+                    f"Only tables with names starting with '{self.table_prefix}' are permitted."
+                )
+                raise ValueError(error_msg)
             return
 
         schemaname_lower = schemaname.lower()
 
-        # Allow system schemas
-        if schemaname_lower in allowed_system_schemas:
+        # In user mode, system schemas are NOT allowed for user data
+        # However, information_schema is needed for metadata queries (list_objects, etc.)
+        # pg_catalog should remain blocked in user mode
+        if schemaname_lower == "pg_catalog":
+            error_msg = (
+                f"Access to schema '{schemaname}' is not allowed. Only '{self.allowed_schema}' schema is permitted."
+            )
+            raise ValueError(error_msg)
+
+        # Allow information_schema for metadata queries (but only for public schema metadata)
+        # This is needed for list_objects and other metadata operations
+        # However, block access to schemata table which reveals all schemas
+        if schemaname_lower == "information_schema":
+            # Block access to information_schema.schemata in user mode
+            # This prevents users from discovering all schemas in the database
+            if range_var.relname and range_var.relname.lower() == "schemata":
+                error_msg = (
+                    f"Access to '{schemaname}.{range_var.relname}' is not allowed in user mode. "
+                    f"Use the list_schemas tool instead (available in admin mode)."
+                )
+                raise ValueError(error_msg)
+            # Allow access to other information_schema tables for metadata queries
+            # The actual data filtering will happen at the query level
             return
 
         # Check that the schema matches the allowed one
         if schemaname_lower != self.allowed_schema.lower():
             error_msg = (
                 f"Access to schema '{schemaname}' is not allowed. Only '{self.allowed_schema}' schema is permitted."
+            )
+            raise ValueError(error_msg)
+
+        # Check table prefix if set
+        if (
+            self.table_prefix
+            and range_var.relname
+            and not range_var.relname.lower().startswith(self.table_prefix.lower())
+        ):
+            error_msg = (
+                f"Access to table '{range_var.relname}' is not allowed. "
+                f"Only tables with names starting with '{self.table_prefix}' are permitted."
             )
             raise ValueError(error_msg)
 
