@@ -1,19 +1,25 @@
 """Database Tuning Advisor (DTA) tool for Postgres MCP."""
 
+from __future__ import annotations
+
 import logging
 import os
-from typing import Any
-from typing import Dict
-from typing import List
+from typing import TYPE_CHECKING, Any
 
 import humanize
 
-from ..artifacts import ExplainPlanArtifact
-from ..artifacts import calculate_improvement_multiple
-from ..sql import SqlDriver
-from .dta_calc import IndexTuningBase
-from .index_opt_base import IndexDefinition
-from .index_opt_base import IndexTuningResult
+from postgres_mcp.common import calculate_improvement_multiple
+from postgres_mcp.explain import ExplainPlanArtifact
+from postgres_mcp.index.index_opt_base import IndexTuningResult
+from postgres_mcp.sql import IndexDefinition
+
+
+if TYPE_CHECKING:
+    from postgres_mcp.index.index_opt_base import IndexTuningBase
+    from postgres_mcp.sql import SqlDriver
+
+    from .index_opt_base import IndexTuningResult
+
 
 logger = logging.getLogger(__name__)
 
@@ -21,28 +27,27 @@ logger = logging.getLogger(__name__)
 class TextPresentation:
     """Text-based presentation of index tuning recommendations."""
 
-    def __init__(self, sql_driver: SqlDriver, index_tuning: IndexTuningBase):
-        """
-        Initialize the presentation.
+    def __init__(self, sql_driver: SqlDriver, index_tuning: IndexTuningBase) -> None:
+        """Initialize the presentation.
 
         Args:
-            conn: The PostgreSQL connection object
+            sql_driver: The PostgreSQL SQL driver object.
+            index_tuning: The index tuning tool instance.
         """
         self.sql_driver = sql_driver
         self.index_tuning = index_tuning
 
-    async def analyze_workload(self, max_index_size_mb=10000):
-        """
-        Analyze SQL workload and recommend indexes.
+    async def analyze_workload(self, max_index_size_mb: int = 10000) -> dict[str, Any]:
+        """Analyze SQL workload and recommend indexes.
 
         This method analyzes queries from database query history, examining
         frequently executed and costly queries to recommend the most beneficial indexes.
 
         Args:
-            max_index_size_mb: Maximum total size for recommended indexes in MB
+            max_index_size_mb: Maximum total size for recommended indexes in MB.
 
         Returns:
-            Dict with recommendations or error
+            Dict with recommendations or error.
         """
         return await self._execute_analysis(
             min_calls=50,
@@ -51,19 +56,18 @@ class TextPresentation:
             max_index_size_mb=max_index_size_mb,
         )
 
-    async def analyze_queries(self, queries, max_index_size_mb=10000):
-        """
-        Analyze a list of SQL queries and recommend indexes.
+    async def analyze_queries(self, queries: list[str], max_index_size_mb: int = 10000) -> dict[str, Any]:
+        """Analyze a list of SQL queries and recommend indexes.
 
         This method examines the provided SQL queries and recommends
         indexes that would improve their performance.
 
         Args:
-            queries: List of SQL queries to analyze
-            max_index_size_mb: Maximum total size for recommended indexes in MB
+            queries: List of SQL queries to analyze.
+            max_index_size_mb: Maximum total size for recommended indexes in MB.
 
         Returns:
-            Dict with recommendations or error
+            Dict with recommendations or error.
         """
         if not queries:
             return {"error": "No queries provided for analysis"}
@@ -76,19 +80,18 @@ class TextPresentation:
             max_index_size_mb=max_index_size_mb,
         )
 
-    async def analyze_single_query(self, query, max_index_size_mb=10000):
-        """
-        Analyze a single SQL query and recommend indexes.
+    async def analyze_single_query(self, query: str, max_index_size_mb: int = 10000) -> dict[str, Any]:
+        """Analyze a single SQL query and recommend indexes.
 
         This method examines the provided SQL query and recommends
         indexes that would improve its performance.
 
         Args:
-            query: SQL query to analyze
-            max_index_size_mb: Maximum total size for recommended indexes in MB
+            query: SQL query to analyze.
+            max_index_size_mb: Maximum total size for recommended indexes in MB.
 
         Returns:
-            Dict with recommendations or error
+            Dict with recommendations or error.
         """
         return await self._execute_analysis(
             query_list=[query],
@@ -100,17 +103,23 @@ class TextPresentation:
 
     async def _execute_analysis(
         self,
-        query_list=None,
-        min_calls=50,
-        min_avg_time_ms=5.0,
-        limit=100,
-        max_index_size_mb=10000,
-    ):
-        """
-        Execute indexing analysis
+        query_list: list[str] | None = None,
+        min_calls: int = 50,
+        min_avg_time_ms: float = 5.0,
+        limit: int = 100,
+        max_index_size_mb: int = 10000,
+    ) -> dict[str, Any]:
+        """Execute indexing analysis.
+
+        Args:
+            query_list: Optional list of SQL queries to analyze.
+            min_calls: Minimum number of calls for a query to be considered.
+            min_avg_time_ms: Minimum average execution time in ms.
+            limit: Maximum number of queries to analyze.
+            max_index_size_mb: Maximum total size for recommended indexes in MB.
 
         Returns:
-            Dict with recommendations or dict with error
+            Dict with recommendations or dict with error.
         """
         try:
             # Run the index tuning analysis
@@ -166,10 +175,18 @@ class TextPresentation:
                 **langfuse_trace,
             }
         except Exception as e:
-            logger.error(f"Error analyzing queries: {e}", exc_info=True)
+            logger.exception("Error analyzing queries")
             return {"error": f"Error analyzing queries: {e}"}
 
-    def _build_recommendations_list(self, session: IndexTuningResult) -> List[Dict[str, Any]]:
+    def _build_recommendations_list(self, session: IndexTuningResult) -> list[dict[str, Any]]:
+        """Build recommendations list from session.
+
+        Args:
+            session: IndexTuningResult session.
+
+        Returns:
+            List of recommendation dictionaries.
+        """
         recommendations = []
         for index_apply_order, rec in enumerate(session.recommendations):
             rec_dict = {
@@ -196,21 +213,23 @@ class TextPresentation:
                     "(i.e., more than 8191 bytes)."
                 )
             elif rec.potential_problematic_reason:
-                rec_dict["warning"] = f"This index is potentially problematic because it includes a {rec.potential_problematic_reason} column."
+                rec_dict["warning"] = (
+                    f"This index is potentially problematic because it includes a "
+                    f"{rec.potential_problematic_reason} column."
+                )
             recommendations.append(rec_dict)
         return recommendations
 
-    async def _generate_query_impact(self, session: IndexTuningResult) -> List[Dict[str, Any]]:
-        """
-        Generate the query impact section showing before/after explain plans.
+    async def _generate_query_impact(self, session: IndexTuningResult) -> list[dict[str, Any]]:
+        """Generate the query impact section showing before/after explain plans.
 
         Args:
-            session: DTASession containing recommendations
+            session: IndexTuningResult containing recommendations.
 
         Returns:
-            List of dictionaries with query and explain plans
+            List of dictionaries with query and explain plans.
         """
-        query_impact = []
+        query_impact: list[dict[str, Any]] = []
 
         # Get workload queries from the first recommendation
         # (All recommendations have the same queries)
@@ -234,7 +253,9 @@ class TextPresentation:
                 before_plan = await self.index_tuning.get_explain_plan_with_indexes(query, frozenset())
 
                 # Get plan with all recommended indexes
-                index_configs = frozenset(IndexDefinition(rec.table, rec.columns, rec.using) for rec in session.recommendations)
+                index_configs = frozenset(
+                    IndexDefinition(rec.table, rec.columns, rec.using) for rec in session.recommendations
+                )
                 after_plan = await self.index_tuning.get_explain_plan_with_indexes(query, index_configs)
 
                 # Extract costs from plans
@@ -248,7 +269,9 @@ class TextPresentation:
 
                 before_plan_text = ExplainPlanArtifact.format_plan_summary(before_plan)
                 after_plan_text = ExplainPlanArtifact.format_plan_summary(after_plan)
-                diff_text = ExplainPlanArtifact.create_plan_diff(before_plan, after_plan)
+                diff_text = ExplainPlanArtifact.create_plan_diff(
+                    before_plan, after_plan, calculate_improvement_multiple
+                )
 
                 # Add to query impact with costs and improvement
                 query_impact.append(

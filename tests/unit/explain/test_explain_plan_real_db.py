@@ -3,8 +3,8 @@ import logging
 
 import pytest
 
-from postgres_mcp.artifacts import ErrorResult
-from postgres_mcp.artifacts import ExplainPlanArtifact
+from postgres_mcp.common import ErrorResult
+from postgres_mcp.explain import ExplainPlanArtifact
 from postgres_mcp.explain import ExplainPlanTool
 from postgres_mcp.sql import SqlDriver
 

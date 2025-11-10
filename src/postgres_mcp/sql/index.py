@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any
 
@@ -11,6 +13,11 @@ class IndexDefinition:
     using: str = "btree"
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert index definition to dictionary.
+
+        Returns:
+            Dictionary representation of the index definition.
+        """
         return {
             "table": self.table,
             "columns": list(self.columns),
@@ -20,10 +27,20 @@ class IndexDefinition:
 
     @property
     def definition(self) -> str:
+        """Get SQL CREATE INDEX statement for this index.
+
+        Returns:
+            SQL CREATE INDEX statement string.
+        """
         return f"CREATE INDEX {self.name} ON {self.table} USING {self.using} ({', '.join(self.columns)})"
 
     @property
     def name(self) -> str:
+        """Generate index name from table, columns, and index method.
+
+        Returns:
+            Generated index name string.
+        """
         # Clean column names for use in index naming
         # Replace special characters with underscores to avoid issues with
         # functional expressions

@@ -1,4 +1,4 @@
-"""Artifacts for the Database Tuning Advisor."""
+"""Artifacts for PostgreSQL explain plans."""
 
 from __future__ import annotations
 
@@ -9,36 +9,17 @@ from typing import Any
 from attrs import define, field
 
 
-# If the recommendation cost is 0.0, we can't calculate the improvement multiple.
-# Return 1000000.0 to indicate infinite improvement.
-INFINITE_IMPROVEMENT_MULTIPLIER = 1000000.0
-
-
-class ErrorResult:
-    """Simple error result class."""
-
-    def to_text(self) -> str:
-        return self.value
-
-    def __init__(self, message: str):
-        self.value = message
-
-
-def calculate_improvement_multiple(base_cost: float, rec_cost: float) -> float:
-    """Calculate the improvement multiple from this recommendation."""
-    if base_cost <= 0.0:
-        # base_cost or rec_cost might be zero, but as they are floats, the might be
-        # represented as -0.0. That's why we compare to <= 0.0.
-        return 1.0
-    if rec_cost <= 0.0:
-        # If the recommendation cost is 0.0, we can't calculate the improvement multiple.
-        # Return INFINITE_IMPROVEMENT_MULTIPLIER to indicate infinite improvement.
-        return INFINITE_IMPROVEMENT_MULTIPLIER
-    return base_cost / rec_cost
+# Maximum filter text length before truncation
+MAX_FILTER_TEXT_LENGTH = 100
 
 
 @define
 class PlanNode:
+    """PostgreSQL query execution plan node.
+
+    Represents a single node in the execution plan tree with performance metrics.
+    """
+
     node_type: str
     total_cost: float
     startup_cost: float
@@ -63,6 +44,14 @@ class PlanNode:
 
     @classmethod
     def from_json_data(cls, json_node: dict[str, Any]) -> PlanNode:
+        """Create plan node from JSON data.
+
+        Args:
+            json_node: Dictionary with plan node data from PostgreSQL EXPLAIN.
+
+        Returns:
+            PlanNode instance with filled data.
+        """
         # Extract basic fields
         node = cls(
             node_type=json_node["Node Type"],
@@ -100,6 +89,11 @@ class PlanNode:
 
 @define
 class ExplainPlanArtifact:
+    """PostgreSQL query execution plan artifact.
+
+    Contains execution plan tree, timing metrics, and text representation.
+    """
+
     value: str
     plan_tree: PlanNode
     planning_time: float | None = field(default=None)
@@ -111,7 +105,15 @@ class ExplainPlanArtifact:
         plan_tree: PlanNode,
         planning_time: float | None = None,
         execution_time: float | None = None,
-    ):
+    ) -> None:
+        """Initialize execution plan artifact.
+
+        Args:
+            value: JSON representation of the execution plan.
+            plan_tree: Execution plan node tree.
+            planning_time: Planning time in milliseconds.
+            execution_time: Execution time in milliseconds.
+        """
         self.value = value
         self.plan_tree = plan_tree
         self.planning_time = planning_time
@@ -159,19 +161,28 @@ class ExplainPlanArtifact:
 
         # Add actual metrics if available in a compact form
         if node.actual_total_time is not None:
-            output += f" [Actual: {node.actual_startup_time:.2f}..{node.actual_total_time:.2f} ms, Rows: {node.actual_rows}, Loops: {node.actual_loops}]"
+            actual_startup = node.actual_startup_time
+            actual_total = node.actual_total_time
+            actual_rows = node.actual_rows
+            actual_loops = node.actual_loops
+            output += (
+                f" [Actual: {actual_startup:.2f}..{actual_total:.2f} ms, Rows: {actual_rows}, Loops: {actual_loops}]"
+            )
 
         # Add filter if present
         if node.filter:
             filter_text = node.filter
             # Truncate long filters for readability
-            if len(filter_text) > 100:
-                filter_text = filter_text[:97] + "..."
+            if len(filter_text) > MAX_FILTER_TEXT_LENGTH:
+                filter_text = filter_text[: MAX_FILTER_TEXT_LENGTH - 3] + "..."
             output += f"\n{indent}  Filter: {filter_text}"
 
         # Add buffer information if available in a compact form
         if node.shared_hit_blocks is not None:
-            output += f"\n{indent}  Buffers - hit: {node.shared_hit_blocks}, read: {node.shared_read_blocks}, written: {node.shared_written_blocks}"
+            hit_blocks = node.shared_hit_blocks
+            read_blocks = node.shared_read_blocks
+            written_blocks = node.shared_written_blocks
+            output += f"\n{indent}  Buffers - hit: {hit_blocks}, read: {read_blocks}, written: {written_blocks}"
 
         # Recursively format children
         if node.children:
@@ -182,8 +193,20 @@ class ExplainPlanArtifact:
 
     @classmethod
     def from_json_data(cls, plan_data: dict[str, Any]) -> ExplainPlanArtifact:
+        """Create execution plan artifact from JSON data.
+
+        Args:
+            plan_data: Dictionary with execution plan data from PostgreSQL EXPLAIN.
+
+        Returns:
+            ExplainPlanArtifact instance with filled data.
+
+        Raises:
+            ValueError: If required 'Plan' field is missing in the data.
+        """
+        error_missing_plan = "Missing 'Plan' field in explain plan data"
         if "Plan" not in plan_data:
-            raise ValueError("Missing 'Plan' field in explain plan data")
+            raise ValueError(error_missing_plan)
 
         # Create plan tree from the "Plan" field
         plan_tree = PlanNode.from_json_data(plan_data["Plan"])
@@ -200,8 +223,15 @@ class ExplainPlanArtifact:
         )
 
     @staticmethod
-    def format_plan_summary(plan_data):
-        """Extract and format key information from a raw plan data."""
+    def format_plan_summary(plan_data: dict[str, Any] | None) -> str:
+        """Extract and format key information from a raw plan data.
+
+        Args:
+            plan_data: Raw plan data dictionary or None.
+
+        Returns:
+            Formatted plan summary string.
+        """
         if not plan_data:
             return "No plan data available"
 
@@ -214,18 +244,24 @@ class ExplainPlanArtifact:
                 plan_tree = ExplainPlanArtifact._format_plan_node(plan_node, 0)
 
                 return f"{plan_tree}"
-            return "Invalid plan data (missing Plan field)"
 
         except Exception as e:
             return f"Error summarizing plan: {e}"
+        else:
+            return "Invalid plan data (missing Plan field)"
 
     @staticmethod
-    def create_plan_diff(before_plan: dict[str, Any], after_plan: dict[str, Any]) -> str:
+    def create_plan_diff(
+        before_plan: dict[str, Any],
+        after_plan: dict[str, Any],
+        calculate_improvement_multiple: Any,
+    ) -> str:
         """Generate a textual diff between two explain plans.
 
         Args:
             before_plan: The explain plan before changes
             after_plan: The explain plan after changes
+            calculate_improvement_multiple: Function to calculate improvement multiple
 
         Returns:
             A string containing a readable diff between the two plans
@@ -262,7 +298,7 @@ class ExplainPlanArtifact:
             diff_lines.append("Operation Changes:")
 
             # Helper function to extract node types with indentation
-            def extract_node_types(node, level=0, result=None):
+            def extract_node_types(node: PlanNode, level: int = 0, result: list[str] | None = None) -> list[str]:
                 if result is None:
                     result = []
                 indent = "  " * level
@@ -308,9 +344,8 @@ class ExplainPlanArtifact:
             before_scans = [line for line in before_lines if "Seq Scan" in line]
             after_scans = [line for line in after_lines if "Seq Scan" in line]
             if len(before_scans) > len(after_scans):
-                diff_lines.append(
-                    f"- {len(before_scans) - len(after_scans)} sequential scans replaced with more efficient access methods"
-                )
+                scans_replaced = len(before_scans) - len(after_scans)
+                diff_lines.append(f"- {scans_replaced} sequential scans replaced with more efficient access methods")
 
             # Look for new index scans
             before_idx_scans = [line for line in before_lines if "Index Scan" in line]

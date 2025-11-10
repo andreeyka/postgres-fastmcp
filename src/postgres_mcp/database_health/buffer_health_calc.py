@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ..sql import SqlDriver
+
+if TYPE_CHECKING:
+    from postgres_mcp.sql import SqlDriver
 
 
 class BufferHealthCalc:

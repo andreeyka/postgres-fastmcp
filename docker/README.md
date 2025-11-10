@@ -1,55 +1,52 @@
-# Тестовая среда Docker
+# Docker Test Environment
 
-Эта директория содержит конфигурацию для запуска тестовой среды с MCP сервером и PostgreSQL.
+**⚠️ This docker-compose setup is for TESTING ONLY.**
 
-## Структура
+This directory contains configuration for running a test environment with MCP server and PostgreSQL.
+For production Docker usage, see the main Dockerfile and docker-entrypoint.sh in the project root.
 
-- `docker-compose.yml` - основная конфигурация Docker Compose
-- `postgres/init-db.sql` - скрипт инициализации PostgreSQL с тремя тестовыми базами данных
-- `config.test.json` - тестовая конфигурация MCP сервера
+## Structure
 
-## Тестовые базы данных
+- `docker-compose.yml` - main Docker Compose configuration
+- `postgres/init-db.sql` - PostgreSQL initialization script with test databases
+- `postgres/init-4-databases.sql` - PostgreSQL initialization script with 4 databases for different access modes
+- `config.test.json` - test MCP server configuration
 
-Создаются три тестовые базы данных:
+## Test Databases
 
-1. **test_db1**
-   - Пользователь: `test_user1`
-   - Пароль: `test_pass1`
+The initialization scripts create test databases with different access modes:
 
-2. **test_db2**
-   - Пользователь: `test_user2`
-   - Пароль: `test_pass2`
+1. **user_ro_db** - Read-only access, public schema only
+2. **user_rw_db** - Read-write access, public schema only
+3. **admin_ro_db** - Read-only access, all schemas
+4. **admin_rw_db** - Full access, all schemas
 
-3. **test_db3**
-   - Пользователь: `test_user3`
-   - Пароль: `test_pass3`
-
-## Запуск
+## Running
 
 ```bash
-# Сборка и запуск всех сервисов
+# Build and start all services
 docker-compose up --build
 
-# Запуск в фоновом режиме
+# Run in background
 docker-compose up -d --build
 
-# Просмотр логов
+# View logs
 docker-compose logs -f
 
-# Остановка
+# Stop
 docker-compose down
 
-# Остановка с удалением volumes (удалит все данные БД)
+# Stop and remove volumes (will delete all database data)
 docker-compose down -v
 ```
 
-## Доступ
+## Access
 
-- **MCP сервер**: http://localhost:8000
-- **PostgreSQL**: доступен только внутри Docker сети (порт 5432)
+- **MCP server**: http://localhost:8000
+- **PostgreSQL**: available only inside Docker network (port 5432)
 
-## Сеть
+## Network
 
-Все сервисы работают в изолированной Docker сети `mcp-network`. 
-Наружу публикуется только порт 8000 для MCP сервера.
-PostgreSQL доступен только внутри Docker сети по имени хоста `postgres`.
+All services run in an isolated Docker network `mcp-network`.
+Only port 8000 for the MCP server is published externally.
+PostgreSQL is available only inside the Docker network via hostname `postgres`.

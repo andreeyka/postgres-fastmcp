@@ -4,19 +4,13 @@
     "endpoint": "mcp",
     "transport": "http",
     "databases": {
-        "postgres": {
-            "database_uri": "postgresql://user:pass@localhost:5432/db_name",
-            "endpoint": true,
-            "streamable": true
-        },
-        "analytics": {
-            "database_uri": "postgresql://user:pass@localhost:5432/analytics"
-        },
-        "statistics": {
-            "database_uri": "postgresql://user:pass@localhost:5432/statistics"
+        "admin_rw_db": {
+            "database_uri": "postgresql://postgres:postgres@postgres:5432/admin_rw_db",
+            "streamable": false,
+            "access_mode": "admin_rw"
         }
     },
-    "host": "127.0.0.1",
+    "host": "0.0.0.0",
     "port": 8000,
     "workers": 1
 }

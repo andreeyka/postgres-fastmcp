@@ -1,33 +1,32 @@
+"""Database Tuning Advisor implementation for index recommendations."""
+
+from __future__ import annotations
+
 import logging
 import time
 from itertools import combinations
-from typing import Any
-from typing import override
+from typing import Any, override
 
 import humanize
-from pglast.ast import ColumnRef
-from pglast.ast import JoinExpr
-from pglast.ast import Node
-from pglast.ast import SelectStmt
+from pglast import parser
+from pglast.ast import ColumnRef, FuncCall, JoinExpr, Node, SelectStmt
 
-from ..sql import ColumnCollector
-from ..sql import SafeSqlDriver
-from ..sql import SqlDriver
-from ..sql import TableAliasVisitor
-from .index_opt_base import IndexRecommendation
-from .index_opt_base import IndexTuningBase
-from .index_opt_base import candidate_str
-from .index_opt_base import pp_list
+from postgres_mcp.sql import ColumnCollector, SafeSqlDriver, SqlDriver, TableAliasVisitor
 
-logger = logging.getLogger(__name__)
+from .index_opt_base import IndexRecommendation, IndexTuningBase, candidate_str, pp_list
 
-# --- Data Classes ---
 
 logger = logging.getLogger(__name__)
 
 
 class DatabaseTuningAdvisor(IndexTuningBase):
-    def __init__(
+    """Database Tuning Advisor for generating index recommendations.
+
+    Uses a hybrid 'seed + greedy' approach with time cutoff to recommend
+    optimal indexes for query workloads.
+    """
+
+    def __init__(  # noqa: PLR0913
         self,
         sql_driver: SqlDriver,
         budget_mb: int = -1,  # no limit by default
@@ -37,16 +36,18 @@ class DatabaseTuningAdvisor(IndexTuningBase):
         seed_columns_count: int = 3,  # how many single-col seeds to pick
         pareto_alpha: float = 2.0,
         min_time_improvement: float = 0.1,
-    ):
-        """
-        :param sql_driver: Database access
-        :param budget_mb: Storage budget
-        :param max_runtime_seconds: Time limit for entire analysis (anytime approach)
-        :param max_index_width: Maximum columns in an index
-        :param min_column_usage: skip columns that appear in fewer than X queries
-        :param seed_columns_count: how many top single-column indexes to pick as seeds
-        :param pareto_alpha: stop when relative improvement falls below this threshold
-        :param min_time_improvement: stop when relative improvement falls below this threshold
+    ) -> None:
+        """Initialize Database Tuning Advisor.
+
+        Args:
+            sql_driver: Database access driver.
+            budget_mb: Storage budget in MB (-1 for no limit).
+            max_runtime_seconds: Time limit for entire analysis (anytime approach).
+            max_index_width: Maximum columns in an index.
+            min_column_usage: Skip columns that appear in fewer than X queries.
+            seed_columns_count: How many top single-column indexes to pick as seeds.
+            pareto_alpha: Stop when relative improvement falls below this threshold.
+            min_time_improvement: Stop when relative improvement falls below this threshold.
         """
         super().__init__(sql_driver)
         self.budget_mb = budget_mb
@@ -59,39 +60,44 @@ class DatabaseTuningAdvisor(IndexTuningBase):
         self.min_time_improvement = min_time_improvement
 
     def _check_time(self) -> bool:
-        """Return True if we have exceeded max_runtime_seconds."""
+        """Check if max runtime has been exceeded.
+
+        Returns:
+            True if we have exceeded max_runtime_seconds, False otherwise.
+        """
         if self.max_runtime_seconds <= 0:
             return False
         elapsed = time.time() - self._analysis_start_time
         return elapsed > self.max_runtime_seconds
 
     @override
-    async def _generate_recommendations(self, query_weights: list[tuple[str, SelectStmt, float]]) -> tuple[set[IndexRecommendation], float]:
-        """Generate index recommendations using a hybrid 'seed + greedy' approach with a time cutoff."""
+    async def _generate_recommendations(
+        self, query_weights: list[tuple[str, SelectStmt, float]]
+    ) -> tuple[set[IndexRecommendation], float]:
+        """Generate index recommendations using a hybrid 'seed + greedy' approach.
 
+        Args:
+            query_weights: List of tuples containing query text, parsed statement, and weight.
+
+        Returns:
+            Tuple of recommended indexes and final cost.
+        """
         # Get existing indexes
         existing_index_defs: set[str] = {idx["definition"] for idx in await self._get_existing_indexes()}
 
-        logger.debug(f"Existing indexes ({len(existing_index_defs)}): {pp_list(list(existing_index_defs))}")
+        logger.debug("Existing indexes (%d): %s", len(existing_index_defs), pp_list(list(existing_index_defs)))
 
         # generate initial candidates
         all_candidates = await self.generate_candidates(query_weights, existing_index_defs)
 
         self.dta_trace(f"All candidates ({len(all_candidates)}): {candidate_str(all_candidates)}")
 
-        # TODO: Remove this once we have a better way to generate seeds
-        # # produce seeds if desired
-        # seeds = set()
-        # if self.seed_columns_count > 0 and not self._check_time():
-        #     seeds = self._quick_pass_seeds(query_weights, all_candidates)
+        seeds = set()
+        if self.seed_columns_count > 0 and not self._check_time():
+            seeds = await self._quick_pass_seeds(query_weights, all_candidates)
 
-        # unify seeds with an empty set
-        #   we treat seeds as "starting points"
-        #   in the real DTA approach, they'd enumerate many seeds,
-        #   but let's just do: [seeds, empty]
-        # Because we do a small scale approach, we only do these 2 seeds
-        seeds_list = [
-            # seeds,
+        seeds_list: list[set[IndexRecommendation]] = [
+            seeds,
             set(),
         ]
 
@@ -103,7 +109,8 @@ class DatabaseTuningAdvisor(IndexTuningBase):
                 break
 
             self.dta_trace("Evaluating seed:")
-            current_cost = await self._evaluate_configuration_cost(query_weights, frozenset(seed))
+            seed_definitions = frozenset(idx.index_definition for idx in seed)
+            current_cost = await self._evaluate_configuration_cost(query_weights, seed_definitions)
             candidate_indexes = set(
                 {
                     IndexRecommendation(
@@ -114,7 +121,9 @@ class DatabaseTuningAdvisor(IndexTuningBase):
                     for c in all_candidates
                 }
             )
-            final_indexes, final_cost = await self._enumerate_greedy(query_weights, seed.copy(), current_cost, candidate_indexes - seed)
+            final_indexes, final_cost = await self._enumerate_greedy(
+                query_weights, seed.copy(), current_cost, candidate_indexes - seed
+            )
 
             if final_cost < best_config[1]:
                 best_config = (final_indexes, final_cost)
@@ -122,9 +131,59 @@ class DatabaseTuningAdvisor(IndexTuningBase):
         # Sort recs by benefit desc
         return best_config
 
-    async def generate_candidates(self, workload: list[tuple[str, SelectStmt, float]], existing_defs: set[str]) -> list[IndexRecommendation]:
-        """Generates index candidates from queries, with batch creation."""
-        table_columns_usage = {}  # table -> {col -> usage_count}
+    async def _build_column_cache(self, tables: set[str]) -> dict[str, set[str]]:
+        """Build a cache of table -> set of column names from the database.
+
+        Args:
+            tables: Set of table names to cache columns for.
+
+        Returns:
+            Dictionary mapping table names (lowercase) to sets of column names (lowercase).
+        """
+        if not tables:
+            return {}
+
+        column_cache: dict[str, set[str]] = {}
+
+        # Build query to get all columns for the tables
+        tables_list = list(tables)
+
+        query = """
+            SELECT table_name, column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+            AND table_name = ANY({})
+            ORDER BY table_name, ordinal_position
+        """
+
+        try:
+            result = await SafeSqlDriver.execute_param_query(self.sql_driver, query, [tables_list])
+            if result:
+                for row in result:
+                    table_name = row.cells["table_name"].lower()
+                    column_name = row.cells["column_name"].lower()
+                    if table_name not in column_cache:
+                        column_cache[table_name] = set()
+                    column_cache[table_name].add(column_name)
+        except Exception as e:
+            logger.warning("Error building column cache: %s. Continuing without cache.", e)
+            return {}
+
+        return column_cache
+
+    async def generate_candidates(  # noqa: C901
+        self, workload: list[tuple[str, SelectStmt, float]], existing_defs: set[str]
+    ) -> list[IndexRecommendation]:
+        """Generate index candidates from queries with batch creation.
+
+        Args:
+            workload: List of tuples containing query text, parsed statement, and weight.
+            existing_defs: Set of existing index definitions to filter out.
+
+        Returns:
+            List of index recommendations.
+        """
+        table_columns_usage: dict[str, dict[str, int]] = {}  # table -> {col -> usage_count}
         # Extract columns from all queries
         for _q, stmt, _ in workload:
             columns_per_table = self._sql_bind_params.extract_stmt_columns(stmt)
@@ -142,19 +201,55 @@ class DatabaseTuningAdvisor(IndexTuningBase):
             if kept_cols:
                 table_columns[tbl] = kept_cols
 
+        # Build column cache for accurate column existence checks
+        all_tables = set(table_columns.keys())
+        column_cache = await self._build_column_cache(all_tables)
+
+        # Extract columns used in conditions (WHERE/JOIN/HAVING/ORDER BY) for optimization
+        # This allows us to generate only relevant index candidates instead of all combinations
+        condition_columns: dict[str, set[str]] = {}  # table -> set of columns used in conditions
+        for _, stmt, _ in workload:
+            try:
+                collector = ConditionColumnCollector(column_cache=column_cache)
+                collector(stmt)
+                query_condition_columns = collector.condition_columns
+                for table, cols in query_condition_columns.items():
+                    if table not in condition_columns:
+                        condition_columns[table] = set()
+                    condition_columns[table].update(cols)
+            except Exception as e:
+                error_msg = "Error extracting condition columns from query"
+                raise ValueError(error_msg) from e
+
+        # Generate candidates only from columns used in conditions (optimized approach)
+        # Intersect with table_columns to ensure we only use frequently used columns
         candidates = []
         for table, cols in table_columns.items():
-            # TODO: Optimize by prioritizing columns from filters/joins; current approach generates all combinations
-            col_list = list(cols)
-            for width in range(1, min(self.max_index_width, len(cols)) + 1):
-                for combo in combinations(col_list, width):
-                    candidates.append(IndexRecommendation(table=table, columns=tuple(combo)))
+            # Use intersection: columns that are both frequently used AND in conditions
+            condition_cols = condition_columns.get(table, set())
+            relevant_cols = cols & condition_cols  # Intersection
+
+            # If no condition columns found, fall back to all columns (safety fallback)
+            # This handles edge cases where conditions might not be detected
+            if not relevant_cols and cols:
+                relevant_cols = cols
+
+            if relevant_cols:
+                col_list = list(relevant_cols)
+                for width in range(1, min(self.max_index_width, len(col_list)) + 1):
+                    candidates.extend(
+                        [
+                            IndexRecommendation(table=table, columns=tuple(combo))
+                            for combo in combinations(col_list, width)
+                        ]
+                    )
 
         # filter out duplicates with existing indexes
         filtered_candidates = [c for c in candidates if not self._index_exists(c, existing_defs)]
 
-        # filter out candidates with columns not used in query conditions
-        condition_filtered1 = self._filter_candidates_by_query_conditions(workload, filtered_candidates)
+        # Note: Filtering by query conditions is no longer needed since we already
+        # generate candidates only from condition columns, but we keep it for safety
+        condition_filtered1 = await self._filter_candidates_by_query_conditions(workload, filtered_candidates)
 
         # filter out long text columns
         condition_filtered = await self._filter_long_text_columns(condition_filtered1)
@@ -185,6 +280,59 @@ class DatabaseTuningAdvisor(IndexTuningBase):
             await self.sql_driver.execute_query("SELECT hypopg_reset();")
         return condition_filtered
 
+    async def _quick_pass_seeds(
+        self,
+        query_weights: list[tuple[str, SelectStmt, float]],
+        all_candidates: list[IndexRecommendation],
+    ) -> set[IndexRecommendation]:
+        """Generate seed indexes by selecting top single-column indexes.
+
+        Selects the most frequently used single-column indexes as starting points
+        for the greedy search algorithm.
+
+        Args:
+            query_weights: List of tuples containing query text, parsed statement, and weight.
+            all_candidates: List of all candidate indexes.
+
+        Returns:
+            Set of seed index recommendations (top single-column indexes).
+        """
+        # Filter only single-column indexes
+        single_column_candidates = [idx for idx in all_candidates if len(idx.columns) == 1]
+
+        if not single_column_candidates or self.seed_columns_count <= 0:
+            return set()
+
+        # Calculate column usage frequency (weighted by query weight)
+        column_usage: dict[tuple[str, str], float] = {}  # (table, column) -> weighted_usage
+        for _query_text, stmt, weight in query_weights:
+            columns_per_table = self._sql_bind_params.extract_stmt_columns(stmt)
+            for table, cols in columns_per_table.items():
+                for col in cols:
+                    key = (table, col)
+                    column_usage[key] = column_usage.get(key, 0.0) + weight
+
+        # Score each single-column candidate by usage frequency
+        scored_candidates: list[tuple[IndexRecommendation, float]] = []
+        for candidate in single_column_candidates:
+            if len(candidate.columns) == 1:
+                table = candidate.table
+                column = candidate.columns[0]
+                usage_score = column_usage.get((table, column), 0.0)
+                scored_candidates.append((candidate, usage_score))
+
+        # Sort by usage score (descending) and take top N
+        scored_candidates.sort(key=lambda x: x[1], reverse=True)
+        top_seeds = scored_candidates[: self.seed_columns_count]
+
+        self.dta_trace(
+            f"Selected {len(top_seeds)} seed indexes from {len(single_column_candidates)} single-column candidates"
+        )
+        for seed, score in top_seeds:
+            self.dta_trace(f"  - Seed: {candidate_str([seed])} (usage_score={score:.2f})")
+
+        return {seed for seed, _ in top_seeds}
+
     async def _enumerate_greedy(
         self,
         queries: list[tuple[str, SelectStmt, float]],
@@ -192,15 +340,25 @@ class DatabaseTuningAdvisor(IndexTuningBase):
         current_cost: float,
         candidate_indexes: set[IndexRecommendation],
     ) -> tuple[set[IndexRecommendation], float]:
-        """
-        Pareto optimal greedy approach using cost/benefit analysis:
+        """Enumerate indexes using Pareto optimal greedy approach.
+
+        Uses cost/benefit analysis:
         - Cost: Size of base relation plus size of indexes (in bytes)
         - Benefit: Inverse of query execution time (1/time)
         - Objective function: log(time) + alpha * log(space)
         - We want to minimize this function, with alpha=2 for 2x emphasis on performance
         - Primary stopping criterion: minimum relative time improvement threshold
+
+        Args:
+            queries: List of tuples containing query text, parsed statement, and weight.
+            current_indexes: Current set of indexes.
+            current_cost: Current cost of the configuration.
+            candidate_indexes: Set of candidate indexes to evaluate.
+
+        Returns:
+            Tuple of final indexes and final cost.
         """
-        import math
+        import math  # noqa: PLC0415
 
         # Parameters
         alpha = self.pareto_alpha
@@ -226,7 +384,11 @@ class DatabaseTuningAdvisor(IndexTuningBase):
         # Total space is base relation plus indexes
         current_space = base_relation_size + indexes_size
         current_time = current_cost
-        current_objective = math.log(current_time) + alpha * math.log(current_space) if current_cost > 0 and current_space > 0 else float("inf")
+        current_objective = (
+            math.log(current_time) + alpha * math.log(current_space)
+            if current_cost > 0 and current_space > 0
+            else float("inf")
+        )
 
         self.dta_trace(
             f"  - Initial configuration: Time={current_time:.2f}, "
@@ -244,7 +406,7 @@ class DatabaseTuningAdvisor(IndexTuningBase):
             best_time = current_time
             best_space = current_space
             best_objective = current_objective
-            best_time_improvement = 0
+            best_time_improvement = 0.0
 
             for candidate in candidate_indexes:
                 self.dta_trace(f"Evaluating candidate: {candidate_str([candidate])}")
@@ -265,7 +427,9 @@ class DatabaseTuningAdvisor(IndexTuningBase):
                     continue
 
                 # Calculate new time (cost) with this index
-                test_time = await self._evaluate_configuration_cost(queries, frozenset(idx.index_definition for idx in current_indexes | {candidate}))
+                test_time = await self._evaluate_configuration_cost(
+                    queries, frozenset(idx.index_definition for idx in current_indexes | {candidate})
+                )
                 self.dta_trace(f"    + Eval cost (time): {test_time}")
 
                 # Calculate relative time improvement
@@ -273,7 +437,10 @@ class DatabaseTuningAdvisor(IndexTuningBase):
 
                 # Skip if time improvement is below threshold
                 if time_improvement < min_time_improvement:
-                    self.dta_trace(f"  - Skipping candidate: {candidate_str([candidate])} because time improvement is below threshold")
+                    self.dta_trace(
+                        f"  - Skipping candidate: {candidate_str([candidate])} "
+                        "because time improvement is below threshold"
+                    )
                     continue
 
                 # Calculate objective for this configuration
@@ -288,7 +455,10 @@ class DatabaseTuningAdvisor(IndexTuningBase):
                     best_objective = test_objective
                     best_time_improvement = time_improvement
                 else:
-                    self.dta_trace(f"  - Skipping candidate: {candidate_str([candidate])} because it doesn't have the best objective improvement")
+                    self.dta_trace(
+                        f"  - Skipping candidate: {candidate_str([candidate])} "
+                        "because it doesn't have the best objective improvement"
+                    )
 
             # If no improvement or no valid candidates, stop
             if best_index is None:
@@ -328,11 +498,14 @@ class DatabaseTuningAdvisor(IndexTuningBase):
         # Log final configuration
         self.dta_trace("\n[SEARCH COMPLETE]")
         if added_indexes:
-            indexes_size = sum([await self._estimate_index_size(idx.table, list(idx.columns)) for idx in current_indexes])
+            indexes_size = sum(
+                [await self._estimate_index_size(idx.table, list(idx.columns)) for idx in current_indexes]
+            )
             self.dta_trace(
                 f"  - Final configuration: {len(added_indexes)} indexes added"
                 f"\n    + Final time: {current_time:.2f}"
-                f"\n    + Final space: {humanize.naturalsize(current_space)} (Base: {humanize.naturalsize(base_relation_size)}, "
+                f"\n    + Final space: {humanize.naturalsize(current_space)} "
+                f"(Base: {humanize.naturalsize(base_relation_size)}, "
                 f"Indexes: {humanize.naturalsize(indexes_size)})"
                 f"\n    + Final objective: {current_objective:.4f}"
             )
@@ -341,20 +514,34 @@ class DatabaseTuningAdvisor(IndexTuningBase):
 
         return current_indexes, current_time
 
-    def _filter_candidates_by_query_conditions(
+    async def _filter_candidates_by_query_conditions(
         self, workload: list[tuple[str, SelectStmt, float]], candidates: list[IndexRecommendation]
     ) -> list[IndexRecommendation]:
-        """Filter out index candidates that contain columns not used in query conditions."""
+        """Filter out index candidates that contain columns not used in query conditions.
+
+        Args:
+            workload: List of tuples containing query text, parsed statement, and weight.
+            candidates: List of candidate indexes to filter.
+
+        Returns:
+            Filtered list of index recommendations.
+        """
         if not workload or not candidates:
             return candidates
 
         # Extract all columns used in conditions across all queries
-        condition_columns = {}  # Dictionary of table -> set of columns
+        condition_columns: dict[str, set[str]] = {}  # Dictionary of table -> set of columns
+
+        # Build column cache for accurate column existence checks
+        all_tables = set()
+        for candidate in candidates:
+            all_tables.add(candidate.table)
+        column_cache = await self._build_column_cache(all_tables)
 
         for _, stmt, _ in workload:
             try:
                 # Use our enhanced collector to extract condition columns
-                collector = ConditionColumnCollector()
+                collector = ConditionColumnCollector(column_cache=column_cache)
                 collector(stmt)
                 query_condition_columns = collector.condition_columns
 
@@ -365,7 +552,8 @@ class DatabaseTuningAdvisor(IndexTuningBase):
                     condition_columns[table].update(cols)
 
             except Exception as e:
-                raise ValueError("Error extracting condition columns from query") from e
+                error_msg = "Error extracting condition columns from query"
+                raise ValueError(error_msg) from e
 
         # Filter candidates - keep only those where all columns are in condition_columns
         filtered_candidates = []
@@ -381,7 +569,9 @@ class DatabaseTuningAdvisor(IndexTuningBase):
 
         return filtered_candidates
 
-    async def _filter_long_text_columns(self, candidates: list[IndexRecommendation], max_text_length: int = 100) -> list[IndexRecommendation]:
+    async def _filter_long_text_columns(  # noqa: C901
+        self, candidates: list[IndexRecommendation], max_text_length: int = 100
+    ) -> list[IndexRecommendation]:
         """Filter out indexes that contain long text columns based on catalog information.
 
         Args:
@@ -426,11 +616,11 @@ class DatabaseTuningAdvisor(IndexTuningBase):
                 pg_stats.attname = c.column_name
             WHERE c.table_name IN ({tables_array})
             AND c.column_name IN ({columns_array})
-        """
+        """  # noqa: S608
 
-        result = await self.sql_driver.execute_query(type_query)  # type: ignore
+        result = await self.sql_driver.execute_query(type_query)
 
-        logger.debug(f"Column types and length limits: {result}")
+        logger.debug("Column types and length limits: %s", result)
 
         if not result:
             logger.debug("No column types and length limits found")
@@ -449,7 +639,7 @@ class DatabaseTuningAdvisor(IndexTuningBase):
             # Use avg_width from pg_stats as a heuristic - if it's high, likely contains long text
             if potential_long and (avg_width is None or avg_width > max_text_length * 0.4):
                 problematic_columns.add((table, column))
-                logger.debug(f"Identified potentially long text column: {table}.{column} (avg_width: {avg_width})")
+                logger.debug("Identified potentially long text column: %s.%s (avg_width: %s)", table, column, avg_width)
             elif potential_long:
                 potential_problematic_columns.add((table, column))
 
@@ -460,9 +650,9 @@ class DatabaseTuningAdvisor(IndexTuningBase):
             for column in candidate.columns:
                 if (candidate.table, column) in problematic_columns:
                     valid = False
-                    logger.debug(f"Skipping index candidate with long text column: {candidate.table}.{column}")
+                    logger.debug("Skipping index candidate with long text column: %s.%s", candidate.table, column)
                     break
-                elif (candidate.table, column) in potential_problematic_columns:
+                if (candidate.table, column) in potential_problematic_columns:
                     candidate.potential_problematic_reason = "long_text_column"
 
             if valid:
@@ -471,8 +661,13 @@ class DatabaseTuningAdvisor(IndexTuningBase):
         return filtered_candidates
 
     async def _get_existing_indexes(self) -> list[dict[str, Any]]:
-        """Get all existing indexes"""
-        # TODO: we should get the indexes that are relevant to the query
+        """Get all existing indexes.
+
+        Returns:
+            List of dictionaries containing index information.
+
+        TODO: We should get the indexes that are relevant to the query.
+        """
         query = """
         SELECT schemaname as schema,
                tablename as table,
@@ -488,13 +683,18 @@ class DatabaseTuningAdvisor(IndexTuningBase):
         return []
 
     def _index_exists(self, index: IndexRecommendation, existing_defs: set[str]) -> bool:
-        """Check if an index with the same table, columns, and type already exists in the database.
+        """Check if an index with the same table, columns, and type already exists.
 
         Uses pglast to parse index definitions and compare their structure rather than
         doing simple string matching.
-        """
-        from pglast import parser
 
+        Args:
+            index: Index recommendation to check.
+            existing_defs: Set of existing index definitions.
+
+        Returns:
+            True if index exists, False otherwise.
+        """
         try:
             # Parse the candidate index
             candidate_stmt = parser.parse_sql(index.definition)[0]
@@ -525,20 +725,27 @@ class DatabaseTuningAdvisor(IndexTuningBase):
                     if existing_info and self._is_same_index(candidate_info, existing_info):
                         return True
                 except Exception as e:
-                    raise ValueError("Error parsing existing index") from e
+                    error_msg = "Error parsing existing index"
+                    raise ValueError(error_msg) from e
 
-            return False
         except Exception as e:
-            raise ValueError("Error in robust index comparison") from e
+            error_msg = "Error in robust index comparison"
+            raise ValueError(error_msg) from e
+        else:
+            return False
 
-    def _extract_index_info(self, node) -> dict[str, Any] | None:
-        """Extract key information from a parsed index node."""
+    def _extract_index_info(self, node: Any) -> dict[str, Any] | None:  # noqa: ANN401
+        """Extract key information from a parsed index node.
+
+        Args:
+            node: Parsed index AST node.
+
+        Returns:
+            Dictionary with index information or None if extraction fails.
+        """
         try:
             # Handle differences in node structure between pglast versions
-            if hasattr(node, "IndexStmt"):
-                index_stmt = node.IndexStmt
-            else:
-                index_stmt = node
+            index_stmt = node.IndexStmt if hasattr(node, "IndexStmt") else node
 
             # Extract table name
             if hasattr(index_stmt.relation, "relname"):
@@ -576,17 +783,16 @@ class DatabaseTuningAdvisor(IndexTuningBase):
             }
         except Exception as e:
             self.dta_trace(f"Error extracting index info: {e}")
-            raise ValueError("Error extracting index info") from e
+            error_msg = "Error extracting index info"
+            raise ValueError(error_msg) from e
 
-    def _ast_expr_to_string(self, expr) -> str:
+    def _ast_expr_to_string(self, expr: Node) -> str:  # noqa: PLR0911
         """Convert an AST expression (like FuncCall) to a proper string representation.
 
         For example, converts a FuncCall node representing lower(name) to "lower(name)"
         """
         try:
             # Import FuncCall and ColumnRef for type checking
-            from pglast.ast import ColumnRef
-            from pglast.ast import FuncCall
 
             # Check for FuncCall type directly
             if isinstance(expr, FuncCall):
@@ -599,33 +805,41 @@ class DatabaseTuningAdvisor(IndexTuningBase):
                 # Extract arguments
                 args = []
                 if hasattr(expr, "args") and expr.args:
-                    for arg in expr.args:
-                        args.append(self._ast_expr_to_string(arg))
+                    args.extend([self._ast_expr_to_string(arg) for arg in expr.args])
 
                 # Format as function call
                 return f"{func_name}({','.join(args)})"
 
             # Check for ColumnRef type directly
-            elif isinstance(expr, ColumnRef):
+            if isinstance(expr, ColumnRef):
                 if hasattr(expr, "fields") and expr.fields:
                     return ".".join([field.sval for field in expr.fields if hasattr(field, "sval")])
                 return "unknown_column"
 
             # Try to handle direct values
-            elif hasattr(expr, "sval"):  # String value
-                return expr.sval
-            elif hasattr(expr, "ival"):  # Integer value
+            if hasattr(expr, "sval"):  # String value
+                return str(expr.sval)
+            if hasattr(expr, "ival"):  # Integer value
                 return str(expr.ival)
-            elif hasattr(expr, "fval"):  # Float value
-                return expr.fval
+            if hasattr(expr, "fval"):  # Float value
+                return str(expr.fval)
 
             # Fallback for other expression types
             return str(expr)
         except Exception as e:
-            raise ValueError("Error converting expression to string") from e
+            error_msg = "Error converting expression to string"
+            raise ValueError(error_msg) from e
 
     def _is_same_index(self, index1: dict[str, Any], index2: dict[str, Any]) -> bool:
-        """Check if two indexes are functionally equivalent."""
+        """Check if two indexes are functionally equivalent.
+
+        Args:
+            index1: First index information dictionary.
+            index2: Second index information dictionary.
+
+        Returns:
+            True if indexes are equivalent, False otherwise.
+        """
         if not index1 or not index2:
             return False
 
@@ -640,38 +854,57 @@ class DatabaseTuningAdvisor(IndexTuningBase):
         # Same columns (order matters for most index types)?
         if index1["columns"] != index2["columns"]:
             # For hash indexes, order doesn't matter
-            if index1["type"] == "hash" and set(index1["columns"]) == set(index2["columns"]):
-                return True
-            return False
+            return bool(index1["type"] == "hash" and set(index1["columns"]) == set(index2["columns"]))
 
         # If one is unique and the other is not, they're different
         # Except when a primary key (which is unique) exists and we're considering a non-unique index on same column
-        if index1["unique"] and not index2["unique"]:
-            return False
-
         # Same core definition
-        return True
+        return not (index1["unique"] and not index2["unique"])
 
 
 class ConditionColumnCollector(ColumnCollector):
-    """
+    """Specialized ColumnCollector for condition columns.
+
     A specialized version of ColumnCollector that only collects columns used in
     WHERE, JOIN, HAVING conditions, and properly resolves column aliases.
     """
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.condition_columns = {}  # Specifically for columns in conditions
+    # Constants for column reference field counts
+    UNQUALIFIED_COLUMN_FIELDS = 1  # Single column name (e.g., "name")
+    QUALIFIED_COLUMN_FIELDS = 2  # Table.column format (e.g., "users.name")
+
+    def __init__(self, column_cache: dict[str, set[str]] | None = None) -> None:
+        """Initialize ConditionColumnCollector.
+
+        Args:
+            column_cache: Optional cache of table -> set of column names.
+                If provided, used to verify column existence. If None, falls back to
+                permissive behavior (returns True for all checks).
+        """
+        super().__init__(column_cache=column_cache)
+        self.condition_columns: dict[str, set[str]] = {}  # Specifically for columns in conditions
         self.in_condition = False  # Flag to track if we're inside a condition
 
-    def __call__(self, node):
+    def __call__(self, node: Any) -> dict[str, set[str]]:  # noqa: ANN401
+        """Call the collector on a node.
+
+        Args:
+            node: AST node to process.
+
+        Returns:
+            Dictionary mapping table names to sets of column names.
+        """
         super().__call__(node)
         return self.condition_columns
 
-    def visit_SelectStmt(self, ancestors: list[Node], node: Node) -> None:  # noqa: N802
-        """
-        Visit a SelectStmt node but focus on condition-related clauses,
-        while still collecting column aliases.
+    def visit_SelectStmt(self, _ancestors: list[Node], node: Node) -> None:  # noqa: C901, N802
+        """Visit a SelectStmt node focusing on condition-related clauses.
+
+        Focuses on condition-related clauses while still collecting column aliases.
+
+        Args:
+            ancestors: List of ancestor nodes.
+            node: SelectStmt node to visit.
         """
         if isinstance(node, SelectStmt):
             self.inside_select = True
@@ -692,16 +925,18 @@ class ConditionColumnCollector(ColumnCollector):
             # First pass: collect column aliases from targetList
             if hasattr(node, "targetList") and node.targetList:
                 self.target_list = node.targetList
-                for target_entry in self.target_list:
-                    if hasattr(target_entry, "name") and target_entry.name:
-                        # This is a column alias
-                        col_alias = target_entry.name
-                        # Store the expression node for this alias
-                        if hasattr(target_entry, "val"):
-                            self.column_aliases[col_alias] = {
-                                "node": target_entry.val,
-                                "level": query_level,
-                            }
+                target_list = node.targetList
+                if target_list is not None:
+                    for target_entry in target_list:
+                        if hasattr(target_entry, "name") and target_entry.name:
+                            # This is a column alias
+                            col_alias = target_entry.name
+                            # Store the expression node for this alias
+                            if hasattr(target_entry, "val"):
+                                self.column_aliases[col_alias] = {
+                                    "node": target_entry.val,
+                                    "level": query_level,
+                                }
 
             # Process WHERE clause
             if node.whereClause:
@@ -734,25 +969,25 @@ class ConditionColumnCollector(ColumnCollector):
                     self._process_node_with_aliases(sort_item.node)
                 self.in_condition = in_condition_cache
 
-            # # Process GROUP BY clause - can also benefit from indexes
-            # if hasattr(node, "groupClause") and node.groupClause:
-            #     in_condition_cache = self.in_condition
-            #     self.in_condition = True
-            #     for group_item in node.groupClause:
-            #         self._process_node_with_aliases(group_item)
-            #     self.in_condition = in_condition_cache
-
             # Clean up the context stack
             self.context_stack.pop()
             self.inside_select = False
             self.current_query_level -= 1
 
-    def _process_having_with_aliases(self, having_clause):
-        """Process HAVING clause with special handling for column aliases."""
+    def _process_having_with_aliases(self, having_clause: Any) -> None:  # noqa: ANN401
+        """Process HAVING clause with special handling for column aliases.
+
+        Args:
+            having_clause: HAVING clause node to process.
+        """
         self._process_node_with_aliases(having_clause)
 
-    def _process_node_with_aliases(self, node):
-        """Process a node, resolving any column aliases it contains."""
+    def _process_node_with_aliases(self, node: Node | None) -> None:
+        """Process a node, resolving any column aliases it contains.
+
+        Args:
+            node: AST node to process.
+        """
         if node is None:
             return
 
@@ -772,10 +1007,15 @@ class ConditionColumnCollector(ColumnCollector):
         # For non-alias nodes, process normally
         self(node)
 
-    def visit_ColumnRef(self, ancestors: list[Node], node: Node) -> None:  # noqa: N802
-        """
+    def visit_ColumnRef(self, _ancestors: list[Node], node: Node) -> None:  # noqa: C901, N802
+        """Process column references in condition context.
+
         Process column references, but only if we're in a condition context.
         Skip known column aliases but process their underlying expressions.
+
+        Args:
+            ancestors: List of ancestor nodes.
+            node: ColumnRef node to visit.
         """
         if not self.in_condition:
             return  # Skip if not in a condition context
@@ -798,7 +1038,7 @@ class ConditionColumnCollector(ColumnCollector):
                 self(alias_info["node"])
             return
 
-        if len(fields) == 2:  # Table.column format
+        if len(fields) == self.QUALIFIED_COLUMN_FIELDS:  # Table.column format
             table_or_alias, column = fields
             # Resolve alias to actual table
             table = aliases.get(table_or_alias, table_or_alias)
@@ -808,30 +1048,48 @@ class ConditionColumnCollector(ColumnCollector):
                 self.condition_columns[table] = set()
             self.condition_columns[table].add(column)
 
-        elif len(fields) == 1:  # Unqualified column
+        elif len(fields) == self.UNQUALIFIED_COLUMN_FIELDS:  # Unqualified column
             column = fields[0]
 
             # For unqualified columns, check all tables in context
             found_match = False
-            for table in tables:
+            for table_name in tables:
                 # Skip schema qualification if present
-                if "." in table:
-                    _, table = table.split(".", 1)
+                actual_table = table_name
+                if "." in table_name:
+                    _, actual_table = table_name.split(".", 1)
 
                 # Add column to all tables that have it
-                if self._column_exists(table, column):
-                    if table not in self.condition_columns:
-                        self.condition_columns[table] = set()
-                    self.condition_columns[table].add(column)
+                if self._column_exists(actual_table, column):
+                    if actual_table not in self.condition_columns:
+                        self.condition_columns[actual_table] = set()
+                    self.condition_columns[actual_table].add(column)
                     found_match = True
 
             if not found_match:
-                logger.debug(f"Could not resolve unqualified column '{column}' to any table")
+                logger.debug("Could not resolve unqualified column '%s' to any table", column)
 
     def _column_exists(self, table: str, column: str) -> bool:
-        """Check if column exists in table."""
-        # TODO
-        # This would normally query the database
-        # For now, we'll return True to collect all possible matches
-        # The actual filtering will happen later
-        return True
+        """Check if column exists in table.
+
+        Args:
+            table: Table name.
+            column: Column name.
+
+        Returns:
+            True if column exists in the table according to column_cache,
+            False otherwise. If column_cache is empty, returns False to avoid
+            false positives (safer than returning True for all checks).
+        """
+        if not self.column_cache:
+            # If cache is not provided, return False for safety
+            # This prevents adding non-existent columns
+            return False
+
+        # Check if table exists in cache
+        table_columns = self.column_cache.get(table.lower())
+        if table_columns is None:
+            return False
+
+        # Check if column exists in table
+        return column.lower() in {col.lower() for col in table_columns}

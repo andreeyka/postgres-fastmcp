@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from ..sql import SqlDriver
+
+if TYPE_CHECKING:
+    from postgres_mcp.sql import SqlDriver
 
 
 @dataclass
@@ -39,6 +42,11 @@ class ReplicationMetrics:
 
 class ReplicationCalc:
     """Calculator for database replication health checks."""
+
+    # PostgreSQL version constants (format: major*10000 + minor*100 + patch)
+    MIN_VERSION_REPLICATION_SLOTS = 90400  # PostgreSQL 9.4.0
+    MIN_VERSION_WAL_FUNCTIONS = 100000  # PostgreSQL 10.0.0
+
     def __init__(self, sql_driver: SqlDriver) -> None:
         self.sql_driver = sql_driver
         self._server_version: int | None = None
@@ -81,13 +89,11 @@ class ReplicationCalc:
 
             if active_slots:
                 result.append("\nActive replication slots:")
-                for slot in active_slots:
-                    result.append(f"- {slot.slot_name} (database: {slot.database})")
+                result.extend(f"- {slot.slot_name} (database: {slot.database})" for slot in active_slots)
 
             if inactive_slots:
                 result.append("\nInactive replication slots:")
-                for slot in inactive_slots:
-                    result.append(f"- {slot.slot_name} (database: {slot.database})")
+                result.extend(f"- {slot.slot_name} (database: {slot.database})" for slot in inactive_slots)
         else:
             result.append("\nNo replication slots found.")
 
@@ -126,7 +132,7 @@ class ReplicationCalc:
             return None
 
         # Use appropriate functions based on PostgreSQL version
-        if await self._get_server_version() >= 100000:
+        if await self._get_server_version() >= self.MIN_VERSION_WAL_FUNCTIONS:
             lag_condition = "pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn()"
         else:
             lag_condition = "pg_last_xlog_receive_location() = pg_last_xlog_replay_location()"
@@ -139,7 +145,7 @@ class ReplicationCalc:
                         ELSE EXTRACT (EPOCH FROM NOW() - pg_last_xact_replay_timestamp())
                     END
                 AS replication_lag
-            """)
+            """)  # noqa: S608
             result_list = [dict(x.cells) for x in result] if result is not None else []
             return float(result_list[0]["replication_lag"]) if result_list else None
         except Exception:
@@ -152,7 +158,9 @@ class ReplicationCalc:
         Returns:
             List of ReplicationSlot objects.
         """
-        if await self._get_server_version() < 90400 or not self._feature_supported("replication_slots"):
+        if await self._get_server_version() < self.MIN_VERSION_REPLICATION_SLOTS or not self._feature_supported(
+            "replication_slots"
+        ):
             return []
 
         try:

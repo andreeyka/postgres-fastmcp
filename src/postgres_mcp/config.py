@@ -10,19 +10,25 @@ from typing import Any
 from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from postgres_mcp.mcp_types import AccessMode, TransportConfig
+from postgres_mcp.enums import AccessMode, TransportConfig
 
 
 class DatabaseConfig(BaseModel):
     """Database server configuration."""
 
     database_uri: SecretStr = Field(description="Database connection URL")
-    endpoint: bool = Field(default=False, description="Mount the server as an endpoint (ignored if transport='stdio')")
+    endpoint: bool = Field(
+        default=False,
+        description=(
+            "DEPRECATED: Endpoint mode removed. All servers are mounted with prefixes. "
+            "This parameter is ignored and kept for backward compatibility."
+        ),
+    )
     streamable: bool = Field(
         default=False,
         description=(
             "Use streamable-http transport for this server (only for HTTP transport). "
-            "All tool mode servers must have the same streamable value."
+            "All servers must have the same streamable value."
         ),
     )
     extra_kwargs: dict[str, str] = Field(default_factory=dict, description="Extra keyword arguments")
@@ -73,41 +79,34 @@ class Settings(BaseSettings):
         default=TransportConfig.HTTP, description="Global transport type: 'http' or 'stdio'"
     )
     databases: dict[str, DatabaseConfig] = Field(..., description="Databases configuration")
-    mount_with_prefix: bool = Field(default=True, description="Mount databases with prefix (server name). ")
     host: str = Field(default="127.0.0.1", description="Host to bind the server to")
     port: int = Field(default=8000, description="Port to bind the server to")
     workers: int = Field(default=1, description="Number of workers to run")
     deprecation_warnings: bool = Field(default=True, description="Suppress deprecation warnings")
 
     @model_validator(mode="after")
-    def validate_transport_and_endpoint(self) -> Settings:
-        """Validate transport and endpoint compatibility for all servers.
+    def validate_transport_and_streamable(self) -> Settings:
+        """Validate transport and streamable compatibility for all servers.
 
         Rules:
-        - If transport='stdio', endpoint parameter is ignored (all servers work in tool mode)
-        - If transport='http', all tool mode servers (endpoint=False) should have the same streamable value
+        - If transport='stdio', streamable parameter is ignored
+        - If transport='http', all servers should have the same streamable value
         """
-        # If transport='http', check that all tool mode servers have the same streamable value
+        # If transport='http', check that all servers have the same streamable value
         # If values differ, issue a warning and set streamable=False for all
-        if self.transport == TransportConfig.HTTP:
-            tool_mode_servers = [server for server in self.databases.values() if not server.endpoint]
-            if tool_mode_servers:
-                first_streamable = tool_mode_servers[0].streamable
-                has_different_values = any(
-                    not server.endpoint and server.streamable != first_streamable for server in self.databases.values()
-                )
+        if self.transport == TransportConfig.HTTP and self.databases:
+            first_streamable = next(iter(self.databases.values())).streamable
+            has_different_values = any(server.streamable != first_streamable for server in self.databases.values())
 
-                if has_different_values:
-                    warnings.warn(
-                        "Tool mode servers have different streamable values. "
-                        "All tool mode servers will use streamable=False.",
-                        UserWarning,
-                        stacklevel=2,
-                    )
-                    # Set streamable=False for all tool mode servers
-                    for server in self.databases.values():
-                        if not server.endpoint:
-                            server.streamable = False
+            if has_different_values:
+                warnings.warn(
+                    "Servers have different streamable values. All servers will use streamable=False.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                # Set streamable=False for all servers
+                for server in self.databases.values():
+                    server.streamable = False
 
         return self
 
@@ -122,50 +121,26 @@ class Settings(BaseSettings):
 
     @property
     def tool_mode_servers(self) -> dict[str, DatabaseConfig]:
-        """Get servers in tool mode.
+        """Get all servers (all servers are in tool mode now).
 
         Returns:
-            Dictionary with tool mode server configurations.
-            When transport='stdio', all servers are considered in tool mode regardless of endpoint.
+            Dictionary with all server configurations.
+            When transport='stdio', all servers are considered in tool mode.
         """
-        if self.transport == TransportConfig.STDIO:
-            return self.databases
-        return {name: config for name, config in self.databases.items() if not config.endpoint}
-
-    @property
-    def endpoint_mode_servers(self) -> dict[str, DatabaseConfig]:
-        """Get servers in endpoint mode.
-
-        Returns:
-            Dictionary with endpoint mode server configurations.
-            Returns empty dictionary when transport='stdio'.
-        """
-        if self.transport == TransportConfig.STDIO:
-            return {}
-        return {name: config for name, config in self.databases.items() if config.endpoint}
+        return self.databases
 
     @property
     def tool_mode_streamable(self) -> bool:
-        """Get streamable value for tool mode servers.
+        """Get streamable value for all servers.
 
         Returns:
-            Streamable value for tool mode servers.
-            All tool mode servers have the same streamable value (validated).
-            Returns False if there are no tool mode servers.
+            Streamable value for servers.
+            All servers have the same streamable value (validated).
+            Returns False if there are no servers.
         """
-        tool_mode_servers = list(self.tool_mode_servers.values())
-        if not tool_mode_servers:
+        if not self.databases:
             return False
-        return tool_mode_servers[0].streamable
-
-    @property
-    def has_endpoint_servers(self) -> bool:
-        """Check if there are any servers in endpoint mode.
-
-        Returns:
-            True if there are endpoint mode servers, False otherwise.
-        """
-        return len(self.endpoint_mode_servers) > 0
+        return next(iter(self.databases.values())).streamable
 
     @property
     def server_names(self) -> list[str]:
@@ -175,16 +150,6 @@ class Settings(BaseSettings):
             List of all server names.
         """
         return list(self.databases.keys())
-
-    @property
-    def should_mount_with_prefix(self) -> bool:
-        """Determine if servers should be mounted with prefix.
-
-        Returns:
-            True if servers should be mounted with prefix, False to mount directly on main server.
-            Returns False if there's only one server and mount_with_prefix=False.
-        """
-        return not (len(self.databases) == 1 and not self.mount_with_prefix)
 
 
 def _load_json_config(json_path: Path) -> dict[str, Any] | None:
@@ -228,15 +193,7 @@ def get_settings(**overrides: Any) -> Settings:
         >>> test_settings = get_settings(transport="stdio", port=9000)
     """
     # Try to find config.json in current directory
-    # Check maybe in other directories like config/config.json or config/postgres_mcp/config.json
-    possible_paths = [
-        Path("config.json"),
-    ]
-    json_config = None
-    for json_path in possible_paths:
-        json_config = _load_json_config(json_path)
-        if json_config is not None:
-            break
+    json_config = _load_json_config(Path("config.json"))
 
     # If overrides provided, use them (highest priority)
     if overrides:

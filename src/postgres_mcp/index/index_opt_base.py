@@ -1,24 +1,33 @@
+"""Base classes and utilities for index optimization."""
+
+from __future__ import annotations
+
 import json
 import logging
 import time
-from abc import ABC
-from abc import abstractmethod
-from dataclasses import dataclass
-from dataclasses import field
-from typing import Any
-from typing import Iterable
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from pglast import parse_sql
-from pglast.ast import SelectStmt
+from pglast.ast import Node, SelectStmt
 
-from ..artifacts import calculate_improvement_multiple
-from ..explain import ExplainPlanTool
-from ..sql import IndexDefinition
-from ..sql import SafeSqlDriver
-from ..sql import SqlBindParams
-from ..sql import SqlDriver
-from ..sql import TableAliasVisitor
-from ..sql import check_hypopg_installation_status
+from postgres_mcp.common import calculate_improvement_multiple
+from postgres_mcp.explain import ExplainPlanTool
+from postgres_mcp.sql import (
+    IndexDefinition,
+    SafeSqlDriver,
+    SqlBindParams,
+    SqlDriver,
+    TableAliasVisitor,
+    check_hypopg_installation_status,
+)
+
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +35,14 @@ MAX_NUM_INDEX_TUNING_QUERIES = 10
 
 
 def pp_list(lst: list[Any]) -> str:
-    """Pretty print a list for debugging."""
+    """Pretty print a list for debugging.
+
+    Args:
+        lst: List to pretty print.
+
+    Returns:
+        Formatted string representation of the list.
+    """
     return ("\n  - " if len(lst) > 0 else "") + "\n  - ".join([str(item) for item in lst])
 
 
@@ -45,40 +61,81 @@ class IndexRecommendation:
         using: str = "btree",
         estimated_size_bytes: int = 0,
         potential_problematic_reason: str | None = None,
-    ):
+    ) -> None:
+        """Initialize IndexRecommendation.
+
+        Args:
+            table: Table name.
+            columns: Tuple of column names.
+            using: Index type (default: "btree").
+            estimated_size_bytes: Estimated size in bytes.
+            potential_problematic_reason: Reason if index is potentially problematic.
+        """
         self._definition = IndexDefinition(table, columns, using)
         self.estimated_size_bytes = estimated_size_bytes
         self.potential_problematic_reason = potential_problematic_reason
 
     @property
     def index_definition(self) -> IndexDefinition:
+        """Get the index definition object.
+
+        Returns:
+            IndexDefinition object containing table, columns, and index type.
+        """
         return self._definition
 
     @property
     def definition(self) -> str:
+        """Get the SQL definition string for this index.
+
+        Returns:
+            SQL CREATE INDEX statement string.
+        """
         return self._definition.definition
 
     @property
     def name(self) -> str:
+        """Get the generated index name.
+
+        Returns:
+            Index name string.
+        """
         return self._definition.name
 
     @property
     def columns(self) -> tuple[str, ...]:
+        """Get the column names for this index.
+
+        Returns:
+            Tuple of column names.
+        """
         return self._definition.columns
 
     @property
     def table(self) -> str:
+        """Get the table name for this index.
+
+        Returns:
+            Table name string.
+        """
         return self._definition.table
 
     @property
     def using(self) -> str:
+        """Get the index type (e.g., 'btree', 'hash').
+
+        Returns:
+            Index type string.
+        """
         return self._definition.using
 
     def __hash__(self) -> int:
         return self._definition.__hash__()
 
-    def __eq__(self, other: Any) -> bool:
-        return self._definition.__eq__(other.index_config)
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, IndexRecommendation):
+            return False
+        return self._definition.__eq__(other.index_definition)
 
     def __str__(self) -> str:
         return self._definition.__str__() + f" (estimated_size_bytes: {self.estimated_size_bytes})"
@@ -102,35 +159,73 @@ class IndexRecommendationAnalysis:
 
     @property
     def table(self) -> str:
+        """Get the table name for this index recommendation.
+
+        Returns:
+            Table name string.
+        """
         return self.index_recommendation.table
 
     @property
     def columns(self) -> tuple[str, ...]:
+        """Get the column names for this index recommendation.
+
+        Returns:
+            Tuple of column names.
+        """
         return self.index_recommendation.columns
 
     @property
     def using(self) -> str:
+        """Get the index type for this recommendation.
+
+        Returns:
+            Index type string (e.g., 'btree', 'hash').
+        """
         return self.index_recommendation.using
 
     @property
     def progressive_improvement_multiple(self) -> float:
-        """Calculate the progressive percentage improvement from this recommendation."""
+        """Calculate the progressive percentage improvement from this recommendation.
+
+        Returns:
+            Improvement multiple as a float.
+        """
         return calculate_improvement_multiple(self.progressive_base_cost, self.progressive_recommendation_cost)
 
     @property
     def potential_problematic_reason(self) -> str | None:
+        """Get the reason if this index is potentially problematic.
+
+        Returns:
+            Problem description string or None if no issues.
+        """
         return self.index_recommendation.potential_problematic_reason
 
     @property
     def estimated_size_bytes(self) -> int:
+        """Get the estimated size of this index in bytes.
+
+        Returns:
+            Estimated size in bytes.
+        """
         return self.index_recommendation.estimated_size_bytes
 
     @property
     def individual_improvement_multiple(self) -> float:
-        """Calculate the individual percentage improvement from this recommendation."""
+        """Calculate the individual percentage improvement from this recommendation.
+
+        Returns:
+            Improvement multiple as a float.
+        """
         return calculate_improvement_multiple(self.individual_base_cost, self.individual_recommendation_cost)
 
     def to_index(self) -> IndexRecommendation:
+        """Convert this analysis to an IndexRecommendation.
+
+        Returns:
+            IndexRecommendation object.
+        """
         return self.index_recommendation
 
 
@@ -152,32 +247,46 @@ class IndexTuningResult:
     dta_traces: list[str] = field(default_factory=list)
 
 
-def candidate_str(indexes: Iterable[IndexDefinition] | Iterable[IndexRecommendation] | Iterable[IndexRecommendationAnalysis]) -> str:
+def candidate_str(
+    indexes: Iterable[IndexDefinition] | Iterable[IndexRecommendation] | Iterable[IndexRecommendationAnalysis],
+) -> str:
+    """Convert indexes to a string representation.
+
+    Args:
+        indexes: Iterable of index definitions or recommendations.
+
+    Returns:
+        String representation of indexes.
+    """
     return ", ".join(f"{idx.table}({','.join(idx.columns)})" for idx in indexes) if indexes else "(no indexes)"
 
 
 class IndexTuningBase(ABC):
+    """Base class for index tuning algorithms."""
+
     def __init__(
         self,
         sql_driver: SqlDriver,
-    ):
-        """
-        :param sql_driver: Database access
+    ) -> None:
+        """Initialize IndexTuningBase.
+
+        Args:
+            sql_driver: Database access driver.
         """
         self.sql_driver = sql_driver
 
         # Add memoization caches
         self.cost_cache: dict[frozenset[IndexDefinition], float] = {}
         self._size_estimate_cache: dict[tuple[str, frozenset[str]], int] = {}
-        self._table_size_cache = {}
-        self._estimate_table_size_cache = {}
-        self._explain_plans_cache = {}
+        self._table_size_cache: dict[str, int] = {}
+        self._estimate_table_size_cache: dict[str, int] = {}
+        self._explain_plans_cache: dict[tuple[str, frozenset[IndexDefinition]], dict[str, Any]] = {}
         self._sql_bind_params = SqlBindParams(self.sql_driver)
 
         # Add trace accumulator
         self._dta_traces: list[str] = []
 
-    async def analyze_workload(
+    async def analyze_workload(  # noqa: PLR0913
         self,
         workload: list[dict[str, Any]] | None = None,
         sql_file: str | None = None,
@@ -187,8 +296,7 @@ class IndexTuningBase(ABC):
         limit: int = MAX_NUM_INDEX_TUNING_QUERIES,
         max_index_size_mb: int = -1,
     ) -> IndexTuningResult:
-        """
-        Analyze query workload and recommend indexes.
+        """Analyze query workload and recommend indexes.
 
         This method can analyze workload from three different sources (in order of priority):
         1. Explicit workload passed as a parameter
@@ -231,12 +339,12 @@ class IndexTuningBase(ABC):
 
             # First try to use explicit workload if provided
             if workload:
-                logger.debug(f"Using explicit workload with {len(workload)} queries")
+                logger.debug("Using explicit workload with %d queries", len(workload))
                 session.workload_source = "args"
                 session.workload = workload
             # Then try direct query list if provided
             elif query_list:
-                logger.debug(f"Using provided query list with {len(query_list)} queries")
+                logger.debug("Using provided query list with %d queries", len(query_list))
                 session.workload_source = "query_list"
                 session.workload = []
                 for i, query in enumerate(query_list):
@@ -250,7 +358,7 @@ class IndexTuningBase(ABC):
 
             # Then try SQL file if provided
             elif sql_file:
-                logger.debug(f"Reading queries from file: {sql_file}")
+                logger.debug("Reading queries from file: %s", sql_file)
                 session.workload_source = "sql_file"
                 session.workload = self._get_workload_from_file(sql_file)
 
@@ -278,22 +386,23 @@ class IndexTuningBase(ABC):
                 self.dta_trace(f"Workload queries ({len(workload_queries)}): {pp_list(workload_queries)}")
 
                 # Generate and evaluate index recommendations
-                recommendations: tuple[set[IndexRecommendation], float] = await self._generate_recommendations(query_weights)
+                recommendations: tuple[set[IndexRecommendation], float] = await self._generate_recommendations(
+                    query_weights
+                )
                 session.recommendations = await self._format_recommendations(query_weights, recommendations)
 
                 # Reset HypoPG only once at the end
                 await self.sql_driver.execute_query("SELECT hypopg_reset();")
 
         except Exception as e:
-            logger.error(f"Error in workload analysis: {e}", exc_info=True)
+            logger.exception("Error in workload analysis")
             session.error = f"Error in workload analysis: {e}"
 
         session.dta_traces = self._dta_traces
         return session
 
     async def _run_prechecks(self, session: IndexTuningResult) -> IndexTuningResult | None:
-        """
-        Run pre-checks before analysis and return a session with error if any check fails.
+        """Run pre-checks before analysis and return a session with error if any check fails.
 
         Args:
             session: The current DTASession object
@@ -311,7 +420,9 @@ class IndexTuningBase(ABC):
             return session
 
         # Pre-check 2: Check if ANALYZE has been run at least once
-        result = await self.sql_driver.execute_query("SELECT s.last_analyze FROM pg_stat_user_tables s ORDER BY s.last_analyze LIMIT 1;")
+        result = await self.sql_driver.execute_query(
+            "SELECT s.last_analyze FROM pg_stat_user_tables s ORDER BY s.last_analyze LIMIT 1;"
+        )
         if not result or not any(row.cells.get("last_analyze") is not None for row in result):
             error_message = (
                 "Statistics are not up-to-date. The database needs to be analyzed first. "
@@ -340,11 +451,11 @@ class IndexTuningBase(ABC):
 
             parsed = parse_sql(query_text)
             if not parsed:
-                logger.debug(f"Skipping non-parseable query: {query_text[:50]}...")
+                logger.debug("Skipping non-parseable query: %s...", query_text[:50])
                 continue
             stmt = parsed[0].stmt
             if not self._is_analyzable_stmt(stmt):
-                logger.debug(f"Skipping non-analyzable query: {query_text[:50]}...")
+                logger.debug("Skipping non-analyzable query: %s...", query_text[:50])
                 continue
 
             q["query"] = query_text
@@ -358,11 +469,17 @@ class IndexTuningBase(ABC):
 
     def convert_query_info_to_weight(self, query_info: dict[str, Any]) -> float:
         """Convert query info to weight based on query frequency."""
-        return query_info.get("calls", 1.0) * query_info.get("avg_exec_time", 1.0)
+        calls_value: Any = query_info.get("calls", 1.0)
+        avg_exec_time_value: Any = query_info.get("avg_exec_time", 1.0)
+        calls = float(calls_value) if calls_value is not None else 1.0
+        avg_exec_time = float(avg_exec_time_value) if avg_exec_time_value is not None else 1.0
+        return calls * avg_exec_time
 
-    async def get_explain_plan_with_indexes(self, query_text: str, indexes: frozenset[IndexDefinition]) -> dict[str, Any]:
-        """
-        Get the explain plan for a query with a specific set of indexes.
+    async def get_explain_plan_with_indexes(
+        self, query_text: str, indexes: frozenset[IndexDefinition]
+    ) -> dict[str, Any]:
+        """Get the explain plan for a query with a specific set of indexes.
+
         Results are memoized to avoid redundant explain operations.
 
         Args:
@@ -382,16 +499,29 @@ class IndexTuningBase(ABC):
 
         # Generate the plan using the static method
         explain_plan_tool = ExplainPlanTool(self.sql_driver)
-        plan = await explain_plan_tool.generate_explain_plan_with_hypothetical_indexes(query_text, indexes, False, self)
+        # Pass None for dta since IndexTuningBase is not necessarily DatabaseTuningAdvisor
+        plan = await explain_plan_tool.generate_explain_plan_with_hypothetical_indexes(
+            query_text, indexes, use_generic_plan=False, dta=None
+        )
 
         # Cache the result
         self._explain_plans_cache[cache_key] = plan
         return plan
 
     def _get_workload_from_file(self, file_path: str) -> list[dict[str, Any]]:
-        """Load queries from an SQL file."""
+        """Load queries from an SQL file.
+
+        Args:
+            file_path: Path to the SQL file.
+
+        Returns:
+            List of workload dictionaries.
+
+        Raises:
+            ValueError: If file cannot be read.
+        """
         try:
-            with open(file_path) as f:
+            with Path(file_path).open() as f:
                 content = f.read()
 
             # Split the file content by semicolons to get individual queries
@@ -406,18 +536,39 @@ class IndexTuningBase(ABC):
                     }
                 )
 
-            return queries
         except Exception as e:
-            raise ValueError(f"Error loading queries from file {file_path}") from e
+            error_msg = f"Error loading queries from file {file_path}"
+            raise ValueError(error_msg) from e
+        else:
+            return queries
 
     async def _get_query_stats(self, min_calls: int, min_avg_time_ms: float, limit: int) -> list[dict[str, Any]]:
-        """Get query statistics from pg_stat_statements"""
+        """Get query statistics from pg_stat_statements.
 
+        Args:
+            min_calls: Minimum number of calls.
+            min_avg_time_ms: Minimum average execution time in milliseconds.
+            limit: Maximum number of queries to return.
+
+        Returns:
+            List of query statistics dictionaries.
+        """
         # Reference to original implementation
         return await self._get_query_stats_direct(min_calls, min_avg_time_ms, limit)
 
-    async def _get_query_stats_direct(self, min_calls: int = 50, min_avg_time_ms: float = 5.0, limit: int = 100) -> list[dict[str, Any]]:
-        """Direct implementation of query stats collection."""
+    async def _get_query_stats_direct(
+        self, min_calls: int = 50, min_avg_time_ms: float = 5.0, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Direct implementation of query stats collection.
+
+        Args:
+            min_calls: Minimum number of calls.
+            min_avg_time_ms: Minimum average execution time in milliseconds.
+            limit: Maximum number of queries to return.
+
+        Returns:
+            List of query statistics dictionaries.
+        """
         query = """
         SELECT queryid, query, calls, total_exec_time/calls as avg_exec_time
         FROM pg_stat_statements
@@ -433,8 +584,15 @@ class IndexTuningBase(ABC):
         )
         return [dict(row.cells) for row in result] if result else []
 
-    def _is_analyzable_stmt(self, stmt: Any) -> bool:
-        """Check if a statement can be analyzed for index recommendations."""
+    def _is_analyzable_stmt(self, stmt: Node) -> bool:
+        """Check if a statement can be analyzed for index recommendations.
+
+        Args:
+            stmt: Parsed statement AST node.
+
+        Returns:
+            True if statement can be analyzed, False otherwise.
+        """
         # It should be a SelectStmt
         if not isinstance(stmt, SelectStmt):
             return False
@@ -443,18 +601,16 @@ class IndexTuningBase(ABC):
         visitor(stmt)
 
         # Skip queries that only access system tables
-        if all(table.startswith("pg_") or table.startswith("aurora_") for table in visitor.tables):
-            return False
-        return True
+        return not all(table.startswith(("pg_", "aurora_")) for table in visitor.tables)
 
-    def dta_trace(self, message: Any, exc_info: bool = False):
-        """Convenience function to log DTA thinking process."""
+    def dta_trace(self, message: str) -> None:
+        """Convenience function to log DTA thinking process.
 
+        Args:
+            message: Message to log.
+        """
         # Always log to debug
-        if exc_info:
-            logger.debug(message, exc_info=True)
-        else:
-            logger.debug(message)
+        logger.debug(message)
 
         self._dta_traces.append(message)
 
@@ -486,7 +642,8 @@ class IndexTuningBase(ABC):
                     total_cost += cost * weight
                     valid_queries += 1
                 except Exception as e:
-                    raise ValueError(f"Error executing explain for query: {query_text}") from e
+                    error_msg = f"Error executing explain for query: {query_text}"
+                    raise ValueError(error_msg) from e
 
             if valid_queries == 0:
                 self.dta_trace("    + no valid queries found for cost evaluation")
@@ -495,13 +652,27 @@ class IndexTuningBase(ABC):
             avg_cost = total_cost / valid_queries
             self.cost_cache[indexes] = avg_cost
             self.dta_trace(f"    + config cost: {avg_cost:.2f} (from {valid_queries} queries)")
-            return avg_cost
 
         except Exception as e:
             self.dta_trace(f"    + error evaluating configuration: {e}")
-            raise ValueError("Error evaluating configuration") from e
+            error_msg = "Error evaluating configuration"
+            raise ValueError(error_msg) from e
+        else:
+            return avg_cost
 
     async def _estimate_index_size(self, table: str, columns: list[str]) -> int:
+        """Estimate the size of an index.
+
+        Args:
+            table: Table name.
+            columns: List of column names.
+
+        Returns:
+            Estimated size in bytes.
+
+        Raises:
+            ValueError: If estimation fails.
+        """
         # Create a hashable key for the cache
         cache_key = (table, frozenset(columns))
 
@@ -528,22 +699,39 @@ class IndexTuningBase(ABC):
                 # Cache the result
                 self._size_estimate_cache[cache_key] = size_estimate
                 return size_estimate
-            return 0
         except Exception as e:
-            raise ValueError("Error estimating index size") from e
+            error_msg = "Error estimating index size"
+            raise ValueError(error_msg) from e
+        else:
+            return 0
 
     def _estimate_index_size_internal(self, stats: dict[str, Any]) -> int:
+        """Estimate index size from statistics.
+
+        Args:
+            stats: Dictionary containing column statistics.
+
+        Returns:
+            Estimated size in bytes.
+        """
         width = (stats["total_width"] or 0) + 8  # 8 bytes for the heap TID
         ndistinct = stats["total_distinct"] or 1.0
         ndistinct = ndistinct if ndistinct > 0 else 1.0
         # simplistic formula
-        size_estimate = int(width * ndistinct * 2.0)
-        return size_estimate
+        return int(width * ndistinct * 2.0)
 
     async def _format_recommendations(
         self, query_weights: list[tuple[str, SelectStmt, float]], best_config: tuple[set[IndexRecommendation], float]
     ) -> list[IndexRecommendationAnalysis]:
-        """Format recommendations into a list of IndexRecommendation objects."""
+        """Format recommendations into a list of IndexRecommendationAnalysis objects.
+
+        Args:
+            query_weights: List of tuples containing query text, parsed statement, and weight.
+            best_config: Tuple of best index set and cost.
+
+        Returns:
+            List of formatted index recommendation analyses.
+        """
         # build final recommendations from best_config
         recommendations: list[IndexRecommendationAnalysis] = []
         total_size = 0
@@ -591,7 +779,17 @@ class IndexTuningBase(ABC):
 
     @staticmethod
     def extract_cost_from_json_plan(plan_data: dict[str, Any]) -> float:
-        """Extract total cost from JSON EXPLAIN plan data."""
+        """Extract total cost from JSON EXPLAIN plan data.
+
+        Args:
+            plan_data: Dictionary containing EXPLAIN plan data.
+
+        Returns:
+            Total cost value.
+
+        Raises:
+            ValueError: If cost cannot be extracted.
+        """
         try:
             if not plan_data:
                 return float("inf")
@@ -610,11 +808,12 @@ class IndexTuningBase(ABC):
 
             return float(total_cost)
         except (IndexError, KeyError, ValueError, json.JSONDecodeError) as e:
-            raise ValueError("Error extracting cost from plan") from e
+            error_msg = "Error extracting cost from plan"
+            raise ValueError(error_msg) from e
 
     async def _get_table_size(self, table: str) -> int:
-        """
-        Get the total size of a table including indexes and toast tables.
+        """Get the total size of a table including indexes and toast tables.
+
         Uses memoization to avoid repeated database queries.
 
         Args:
@@ -638,34 +837,44 @@ class IndexTuningBase(ABC):
                 # Cache the result
                 self._table_size_cache[table] = size
                 return size
-            else:
-                # If query fails, use our estimation method
-                size = await self._estimate_table_size(table)
-                self._table_size_cache[table] = size
-                return size
+            # If query fails, use our estimation method
+            size = await self._estimate_table_size(table)
+            self._table_size_cache[table] = size
         except Exception as e:
-            logger.warning(f"Error getting table size for {table}: {e}")
+            logger.warning("Error getting table size for %s: %s", table, e)
             # Use estimation method
             size = await self._estimate_table_size(table)
             self._table_size_cache[table] = size
             return size
+        else:
+            return size
 
     async def _estimate_table_size(self, table: str) -> int:
-        """Estimate the size of a table if we can't get it from the database."""
+        """Estimate the size of a table if we can't get it from the database.
+
+        Args:
+            table: Table name.
+
+        Returns:
+            Estimated size in bytes.
+        """
         try:
             # Try a simple query to get row count and then estimate size
-            result = await SafeSqlDriver.execute_param_query(self.sql_driver, "SELECT count(*) as row_count FROM {}", [table])
+            result = await SafeSqlDriver.execute_param_query(
+                self.sql_driver, "SELECT count(*) as row_count FROM {}", [table]
+            )
             if result and len(result) > 0 and len(result[0].cells) > 0:
                 row_count = int(result[0].cells["row_count"])
                 # Rough estimate: assume 1KB per row
                 return row_count * 1024
         except Exception as e:
-            logger.warning(f"Error estimating table size for {table}: {e}")
+            logger.warning("Error estimating table size for %s: %s", table, e)
 
         # Default size if we can't estimate
         return 10 * 1024 * 1024  # 10MB default
 
     @abstractmethod
-    async def _generate_recommendations(self, query_weights: list[tuple[str, SelectStmt, float]]) -> tuple[set[IndexRecommendation], float]:
+    async def _generate_recommendations(
+        self, query_weights: list[tuple[str, SelectStmt, float]]
+    ) -> tuple[set[IndexRecommendation], float]:
         """Generate index tuning queries."""
-        pass

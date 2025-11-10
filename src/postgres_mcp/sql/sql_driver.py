@@ -5,20 +5,46 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, LiteralString
+from typing import TYPE_CHECKING, Any, LiteralString, NoReturn
 from urllib.parse import urlparse, urlunparse
 
-from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
+
+
+if TYPE_CHECKING:
+    from psycopg import AsyncConnection
+else:
+    AsyncConnection = Any
 
 
 logger = logging.getLogger(__name__)
 
 
+class ConnectionFailedError(ValueError):
+    """Exception for database connection errors."""
+
+    def __init__(self, error_details: str | None) -> None:
+        """Initialize exception.
+
+        Args:
+            error_details: Connection error details (with obfuscated password).
+        """
+        message = f"Connection attempt failed: {error_details}"
+        super().__init__(message)
+        self.error_details = error_details
+
+
 def obfuscate_password(text: str | None) -> str | None:
     """Obfuscate password in any text containing connection information.
+
     Works on connection URLs, error messages, and other strings.
+
+    Args:
+        text: The text containing connection information.
+
+    Returns:
+        The text with passwords obfuscated, or None if input was None.
     """
     if text is None:
         return None
@@ -33,8 +59,9 @@ def obfuscate_password(text: str | None) -> str | None:
             # Replace password with asterisks in proper URL
             netloc = parsed.netloc.replace(parsed.password, "****")
             return urlunparse(parsed._replace(netloc=netloc))
-    except Exception:
-        pass
+    except Exception as e:
+        # If URL parsing fails, fall back to regex-based obfuscation
+        logger.debug("Failed to parse text as URL, using regex-based obfuscation: %s", e)
 
     # Handle strings that contain connection strings but aren't proper URLs
     # Match postgres://user:password@host:port/dbname pattern
@@ -52,9 +79,7 @@ def obfuscate_password(text: str | None) -> str | None:
 
     # Match password in DSN format with double quotes
     dsn_double_quote = re.compile(r'(password\s*=\s*")([^"]+)(")', re.IGNORECASE)
-    text = re.sub(dsn_double_quote, r"\1****\3", text)
-
-    return text
+    return re.sub(dsn_double_quote, r"\1****\3", text)
 
 
 class DbConnPool:
@@ -65,7 +90,7 @@ class DbConnPool:
         connection_url: str | None = None,
         min_size: int = 1,
         max_size: int = 5,
-    ):
+    ) -> None:
         """Initialize database connection pool.
 
         Args:
@@ -78,7 +103,7 @@ class DbConnPool:
         self.max_size = max_size
         self.pool: AsyncConnectionPool | None = None
         self._is_valid = False
-        self._last_error = None
+        self._last_error: str | None = None
 
     async def pool_connect(self, connection_url: str | None = None) -> AsyncConnectionPool:
         """Initialize connection pool with retry logic."""
@@ -90,8 +115,9 @@ class DbConnPool:
         self.connection_url = url
         if not url:
             self._is_valid = False
-            self._last_error = "Database connection URL not provided"
-            raise ValueError(self._last_error)
+            error_msg = "Database connection URL not provided"
+            self._last_error = error_msg
+            raise ValueError(error_msg)
 
         # Close any existing pool before creating a new one
         await self.close()
@@ -114,15 +140,18 @@ class DbConnPool:
 
             self._is_valid = True
             self._last_error = None
-            return self.pool
         except Exception as e:
             self._is_valid = False
-            self._last_error = str(e)
+            error_msg = str(e)
+            self._last_error = error_msg
 
             # Clean up failed pool
             await self.close()
 
-            raise ValueError(f"Connection attempt failed: {obfuscate_password(str(e))}") from e
+            obfuscated_error = obfuscate_password(error_msg)
+            raise ConnectionFailedError(obfuscated_error) from e
+        else:
+            return self.pool
 
     async def close(self) -> None:
         """Close the connection pool."""
@@ -131,7 +160,7 @@ class DbConnPool:
                 # Close the pool
                 await self.pool.close()
             except Exception as e:
-                logger.warning(f"Error closing connection pool: {e}")
+                logger.warning("Error closing connection pool: %s", e)
             finally:
                 self.pool = None
                 self._is_valid = False
@@ -146,6 +175,15 @@ class DbConnPool:
         """Get the last error message."""
         return self._last_error
 
+    def mark_invalid(self, error: str | None = None) -> None:
+        """Mark connection pool as invalid.
+
+        Args:
+            error: Error message if any.
+        """
+        self._is_valid = False
+        self._last_error = error
+
 
 class SqlDriver:
     """Adapter class that wraps a PostgreSQL connection with the interface expected by DTA."""
@@ -158,15 +196,16 @@ class SqlDriver:
 
     def __init__(
         self,
-        conn: Any = None,
+        conn: DbConnPool | AsyncConnection | None = None,
         engine_url: str | None = None,
-    ):
+    ) -> None:
         """Initialize with a PostgreSQL connection or pool.
 
         Args:
             conn: PostgreSQL connection object or pool
             engine_url: Connection URL string as an alternative to providing a connection
         """
+        self.conn: DbConnPool | AsyncConnection | None = None
         if conn:
             self.conn = conn
             # Check if this is a connection pool
@@ -174,24 +213,34 @@ class SqlDriver:
         elif engine_url:
             # Don't connect here since we need async connection
             self.engine_url = engine_url
-            self.conn = None
             self.is_pool = False
         else:
-            raise ValueError("Either conn or engine_url must be provided")
+            error_msg = "Either conn or engine_url must be provided"
+            raise ValueError(error_msg)
 
-    def connect(self):
+    def connect(self) -> DbConnPool | AsyncConnection:
+        """Connect to the database.
+
+        Returns:
+            The connection pool or connection object.
+
+        Raises:
+            ValueError: If connection cannot be established.
+        """
         if self.conn is not None:
             return self.conn
         if self.engine_url:
             self.conn = DbConnPool(self.engine_url)
             self.is_pool = True
             return self.conn
-        raise ValueError("Connection not established. Either conn or engine_url must be provided")
+        error_msg = "Connection not established. Either conn or engine_url must be provided"
+        raise ValueError(error_msg)
 
-    async def execute_query(
+    async def execute_query(  # noqa: C901
         self,
         query: LiteralString,
         params: list[Any] | None = None,
+        *,
         force_readonly: bool = False,
     ) -> list[RowResult] | None:
         """Execute a query and return results.
@@ -204,14 +253,24 @@ class SqlDriver:
         Returns:
             List of RowResult objects or None on error
         """
+
+        def _raise_connection_error() -> NoReturn:
+            """Raise exception about unestablished connection.
+
+            Raises:
+                ValueError: If connection is not established.
+            """
+            error_msg = "Connection not established"
+            raise ValueError(error_msg)
+
         try:
             if self.conn is None:
                 self.connect()
                 if self.conn is None:
-                    raise ValueError("Connection not established")
+                    _raise_connection_error()
 
             # Handle connection pool vs direct connection
-            if self.is_pool:
+            if self.is_pool and isinstance(self.conn, DbConnPool):
                 # For pools, get a connection from the pool
                 pool = await self.conn.pool_connect()
                 async with pool.connection() as connection:
@@ -219,21 +278,25 @@ class SqlDriver:
                     # We manage transactions explicitly in _execute_with_connection
                     await connection.set_autocommit(True)
                     return await self._execute_with_connection(connection, query, params, force_readonly=force_readonly)
-            else:
+            elif self.conn is not None and isinstance(self.conn, AsyncConnection):
                 # Direct connection approach
                 # Ensure autocommit is set for direct connections too
                 if hasattr(self.conn, "set_autocommit"):
                     await self.conn.set_autocommit(True)
                 return await self._execute_with_connection(self.conn, query, params, force_readonly=force_readonly)
+
+            # If we reach here, connection type is not supported
+            _raise_connection_error()
         except Exception as e:
             # Mark pool as invalid if there was a connection issue
             if self.conn and self.is_pool:
-                self.conn._is_valid = False  # type: ignore
-                self.conn._last_error = str(e)  # type: ignore
+                conn_pool = self.conn
+                if isinstance(conn_pool, DbConnPool):
+                    conn_pool.mark_invalid(str(e))
             elif self.conn and not self.is_pool:
                 self.conn = None
 
-            raise e
+            raise
 
     async def _execute_with_connection(
         self,
@@ -291,14 +354,14 @@ class SqlDriver:
 
                     return [SqlDriver.RowResult(cells=dict(row)) for row in rows]
 
-                except Exception as query_error:
+                except Exception:
                     # Rollback on any error during query execution
                     try:
                         await cursor.execute("ROLLBACK")
                     except Exception as rollback_error:
-                        logger.error(f"Error rolling back transaction: {rollback_error}")
-                    raise query_error
+                        logger.error("Error rolling back transaction: %s", rollback_error)
+                    raise
 
         except Exception as e:
-            logger.error(f"Error executing query ({query}): {e}")
-            raise e
+            logger.error("Error executing query (%s): %s", query, e)
+            raise

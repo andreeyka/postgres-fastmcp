@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import logging
 from enum import Enum
-from typing import List
+from typing import TYPE_CHECKING
 
-import mcp.types as types
+from mcp import types
 
 from .buffer_health_calc import BufferHealthCalc
 from .connection_health_calc import ConnectionHealthCalc
@@ -14,12 +14,19 @@ from .replication_calc import ReplicationCalc
 from .sequence_health_calc import SequenceHealthCalc
 from .vacuum_health_calc import VacuumHealthCalc
 
-ResponseType = List[types.TextContent | types.ImageContent | types.EmbeddedResource]
+
+if TYPE_CHECKING:
+    from postgres_mcp.sql import SafeSqlDriver, SqlDriver
+
+
+ResponseType = list[types.TextContent | types.ImageContent | types.EmbeddedResource]
 
 logger = logging.getLogger(__name__)
 
 
 class HealthType(str, Enum):
+    """Enumeration of available database health check types."""
+
     INDEX = "index"
     CONNECTION = "connection"
     VACUUM = "vacuum"
@@ -33,7 +40,7 @@ class HealthType(str, Enum):
 class DatabaseHealthTool:
     """Tool for analyzing database health metrics."""
 
-    def __init__(self, sql_driver) -> None:
+    def __init__(self, sql_driver: SqlDriver | SafeSqlDriver) -> None:
         """Initialize the database health tool.
 
         Args:
@@ -41,7 +48,7 @@ class DatabaseHealthTool:
         """
         self.sql_driver = sql_driver
 
-    async def health(self, health_type: str) -> str:
+    async def health(self, health_type: str) -> str:  # noqa: C901
         """Run database health checks for the specified components.
 
         Args:
@@ -58,12 +65,12 @@ class DatabaseHealthTool:
             except ValueError:
                 return (
                     f"Invalid health types provided: '{health_type}'. "
-                    + f"Valid values are: {', '.join(sorted([t.value for t in HealthType]))}. "
-                    + "Please try again with a comma-separated list of valid health types."
+                    f"Valid values are: {', '.join(sorted([t.value for t in HealthType]))}. "
+                    "Please try again with a comma-separated list of valid health types."
                 )
 
             if HealthType.ALL in health_types:
-                health_types = [t.value for t in HealthType if t != HealthType.ALL]
+                health_types = {t for t in HealthType if t != HealthType.ALL}
 
             if HealthType.INDEX in health_types:
                 index_health = IndexHealthCalc(self.sql_driver)
@@ -97,7 +104,8 @@ class DatabaseHealthTool:
                 constraint_health = ConstraintHealthCalc(self.sql_driver)
                 result += "Constraint health: " + await constraint_health.invalid_constraints_check() + "\n"
 
-            return result if result else "No health checks were performed."
         except Exception as e:
-            logger.error(f"Error calculating database health: {e}", exc_info=True)
+            logger.exception("Error calculating database health")
             return f"Error calculating database health: {e}"
+        else:
+            return result if result else "No health checks were performed."

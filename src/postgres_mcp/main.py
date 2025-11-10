@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import warnings
 
 import click
 from pydantic import SecretStr
@@ -20,7 +21,6 @@ configure_logging(
     level="INFO",
     omit_repeated_times=False,  # Disable time grouping
 )
-
 
 logger = get_logger(__name__)
 
@@ -90,18 +90,30 @@ def main(  # noqa: PLR0913
             endpoint=endpoint,
             streamable=streamable,
         )
-        # Default for single server: mount without prefix
+        # Always use Server Composition with prefixes (default behavior)
         app_settings = get_settings(
             transport=transport,
             databases={server_name: database_config},
             host=host,
             port=port,
             workers=workers,
-            mount_with_prefix=False,  # Single server - mount without prefix
         )
     else:
         # Use standard configuration from config.json/env
         app_settings = get_settings()
+
+    # Suppress deprecation warnings from websockets (used by uvicorn) if configured
+    if app_settings.deprecation_warnings:
+        warnings.filterwarnings(
+            "ignore",
+            category=DeprecationWarning,
+            module="websockets",
+        )
+        warnings.filterwarnings(
+            "ignore",
+            category=DeprecationWarning,
+            module="uvicorn.protocols.websockets",
+        )
 
     # Start server - asyncio.run() and uvicorn/FastMCP handle signals automatically
     try:

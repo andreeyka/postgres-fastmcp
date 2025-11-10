@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 from fastmcp import FastMCP
 
+from postgres_mcp.enums import TransportConfig
 from postgres_mcp.logger import get_logger
-from postgres_mcp.mcp_types import TransportConfig
 from postgres_mcp.server.lifespan import LifespanManager
 
 
@@ -39,6 +39,9 @@ class BaseServerBuilder(ABC):
     def register_tool_mode_servers(self, transport_type: TransportConfig) -> list[str]:
         """Register tool mode servers on the main FastMCP server.
 
+        - Single server: tools are registered directly on main_mcp (no prefix)
+        - Multiple servers: each server is mounted with its name as prefix (Server Composition)
+
         Args:
             transport_type: Transport type for logging.
 
@@ -49,10 +52,10 @@ class BaseServerBuilder(ABC):
             RuntimeError: If ToolManager is not found for a server.
         """
         mounted_servers: list[str] = []
-        use_prefix = self.config.should_mount_with_prefix
 
-        # For stdio all servers are in tool mode, for http - only those not in endpoint mode
+        # All servers are in tool mode (endpoint mode removed)
         tool_mode_servers = self.config.tool_mode_servers
+        is_single_server = len(tool_mode_servers) == 1
 
         for server_name in tool_mode_servers:
             tools = self.lifespan_manager.get_tools(server_name)
@@ -60,10 +63,24 @@ class BaseServerBuilder(ABC):
                 error_msg = f"ToolManager instance not found for server {server_name}"
                 raise RuntimeError(error_msg)
 
-            if use_prefix:
-                # Mount with prefix (server name)
+            if is_single_server:
+                # Single server: mount directly on main server without prefix
+                tools.register_tools(self.main_mcp, prefix=None)
+                if transport_type == TransportConfig.STDIO:
+                    logger.info(
+                        "Server %s: Mounted directly on main server (no prefix) -> stdio",
+                        server_name,
+                    )
+                else:
+                    logger.info(
+                        "Server %s: Mounted directly on main server (no prefix) -> /%s",
+                        server_name,
+                        self.config.endpoint,
+                    )
+            else:
+                # Multiple servers: mount with prefix using Server Composition
                 sub_server = FastMCP(name=server_name)
-                tools.register_tools(sub_server)
+                tools.register_tools(sub_server, prefix=server_name)
                 self.main_mcp.mount(sub_server, prefix=server_name)
                 if transport_type == TransportConfig.STDIO:
                     logger.info(
@@ -75,20 +92,6 @@ class BaseServerBuilder(ABC):
                     logger.info(
                         "Server %s: Mounted with prefix %s -> /%s",
                         server_name,
-                        server_name,
-                        self.config.endpoint,
-                    )
-            else:
-                # Mount directly on main server without prefix
-                tools.register_tools(self.main_mcp)
-                if transport_type == TransportConfig.STDIO:
-                    logger.info(
-                        "Server %s: Mounted directly on main server (no prefix) -> stdio",
-                        server_name,
-                    )
-                else:
-                    logger.info(
-                        "Server %s: Mounted directly on main server (no prefix) -> /%s",
                         server_name,
                         self.config.endpoint,
                     )

@@ -1,96 +1,94 @@
+# ruff: noqa: ERA001
 from __future__ import annotations
 
 import asyncio
 import logging
 import re
-from typing import Any
-from typing import ClassVar
-from typing import Optional
+from typing import Any, ClassVar, LiteralString
 
 import pglast
-from pglast.ast import A_ArrayExpr
-from pglast.ast import A_Const
-from pglast.ast import A_Expr
-from pglast.ast import A_Indices
-from pglast.ast import A_Indirection
-from pglast.ast import A_Star
-from pglast.ast import Alias
-from pglast.ast import BitString
-from pglast.ast import Boolean
-from pglast.ast import BooleanTest
-from pglast.ast import BoolExpr
-from pglast.ast import CaseExpr
-from pglast.ast import CaseWhen
-from pglast.ast import ClosePortalStmt
-from pglast.ast import CoalesceExpr
-from pglast.ast import CollateClause
-from pglast.ast import ColumnRef
-from pglast.ast import CommonTableExpr
-from pglast.ast import CreateExtensionStmt
-from pglast.ast import DeallocateStmt
-from pglast.ast import DeclareCursorStmt
-from pglast.ast import DefElem
-from pglast.ast import ExplainStmt
-from pglast.ast import FetchStmt
-from pglast.ast import Float
-from pglast.ast import FromExpr
-from pglast.ast import FuncCall
-from pglast.ast import GroupingFunc
-from pglast.ast import GroupingSet
-from pglast.ast import Integer
-from pglast.ast import JoinExpr
-from pglast.ast import MinMaxExpr
-from pglast.ast import NamedArgExpr
-from pglast.ast import Node
-from pglast.ast import NotifyStmt
-from pglast.ast import NullTest
-from pglast.ast import ParamRef
-from pglast.ast import PrepareStmt
-from pglast.ast import RangeFunction
-from pglast.ast import RangeSubselect
-from pglast.ast import RangeTableFunc
-from pglast.ast import RangeTableFuncCol
-from pglast.ast import RangeTableSample
-from pglast.ast import RangeVar
-from pglast.ast import RawStmt
-from pglast.ast import ResTarget
-from pglast.ast import RowCompareExpr
-from pglast.ast import RowExpr
-from pglast.ast import ScalarArrayOpExpr
-from pglast.ast import SelectStmt
-from pglast.ast import SortBy
-from pglast.ast import SortGroupClause
-from pglast.ast import SQLValueFunction
-from pglast.ast import String
-from pglast.ast import SubLink
-from pglast.ast import TableFunc
-from pglast.ast import TableSampleClause
-from pglast.ast import TargetEntry
-from pglast.ast import TypeCast
-from pglast.ast import TypeName
-from pglast.ast import VacuumStmt
-from pglast.ast import VariableShowStmt
-from pglast.ast import WindowClause
-from pglast.ast import WindowDef
-from pglast.ast import WindowFunc
-from pglast.ast import WithClause
-from pglast.ast import InsertStmt
-from pglast.ast import UpdateStmt
-from pglast.ast import DeleteStmt
+from pglast.ast import (
+    A_ArrayExpr,
+    A_Const,
+    A_Expr,
+    A_Indices,
+    A_Indirection,
+    A_Star,
+    Alias,
+    BitString,
+    Boolean,
+    BooleanTest,
+    BoolExpr,
+    CaseExpr,
+    CaseWhen,
+    ClosePortalStmt,
+    CoalesceExpr,
+    CollateClause,
+    ColumnRef,
+    CommonTableExpr,
+    CreateExtensionStmt,
+    DeallocateStmt,
+    DeclareCursorStmt,
+    DefElem,
+    DeleteStmt,
+    ExplainStmt,
+    FetchStmt,
+    Float,
+    FromExpr,
+    FuncCall,
+    GroupingFunc,
+    GroupingSet,
+    InsertStmt,
+    Integer,
+    JoinExpr,
+    MinMaxExpr,
+    NamedArgExpr,
+    Node,
+    NotifyStmt,
+    NullTest,
+    ParamRef,
+    PrepareStmt,
+    RangeFunction,
+    RangeSubselect,
+    RangeTableFunc,
+    RangeTableFuncCol,
+    RangeTableSample,
+    RangeVar,
+    RawStmt,
+    ResTarget,
+    RowCompareExpr,
+    RowExpr,
+    ScalarArrayOpExpr,
+    SelectStmt,
+    SortBy,
+    SortGroupClause,
+    SQLValueFunction,
+    String,
+    SubLink,
+    TableFunc,
+    TableSampleClause,
+    TargetEntry,
+    TypeCast,
+    TypeName,
+    UpdateStmt,
+    VacuumStmt,
+    VariableShowStmt,
+    WindowClause,
+    WindowDef,
+    WindowFunc,
+    WithClause,
+)
 from pglast.enums import A_Expr_Kind
-from psycopg.sql import SQL
-from psycopg.sql import Composable
-from psycopg.sql import Literal
-from typing_extensions import LiteralString
+from psycopg.sql import SQL, Composable, Literal
 
 from .sql_driver import SqlDriver
+
 
 logger = logging.getLogger(__name__)
 
 
 class SafeSqlDriver(SqlDriver):
-    """A wrapper around any SqlDriver that only allows SELECT, ANALYZE, VACUUM, EXPLAIN SELECT, and
-    SHOW queries.
+    """A wrapper around any SqlDriver that only allows SELECT, ANALYZE, VACUUM, EXPLAIN SELECT, and SHOW queries.
 
     Uses pglast to parse and validate SQL statements before execution.
     All other statement types (DDL, DML etc) are rejected.
@@ -870,63 +868,83 @@ class SafeSqlDriver(SqlDriver):
         sql_driver: SqlDriver,
         timeout: float | None = None,
         allowed_schema: str | None = None,
+        *,
         read_only: bool = True,
-    ):
+        query_tag: str = "postgres-fastmcp",
+    ) -> None:
         """Initialize with an underlying SQL driver and optional timeout.
 
         Args:
             sql_driver: The underlying SQL driver to wrap
             timeout: Optional timeout in seconds for query execution
             allowed_schema: Allowed schema name (e.g., 'public'). None means all schemas allowed.
-            read_only: If True, only read-only operations are allowed. If False, DML (INSERT/UPDATE/DELETE) is allowed but DDL is still prohibited.
+            read_only: If True, only read-only operations are allowed. If False, DML (INSERT/UPDATE/DELETE)
+                is allowed but DDL is still prohibited.
+            query_tag: Tag to add to SQL queries for identification in logs and monitoring.
         """
         self.sql_driver = sql_driver
         self.timeout = timeout
         self.allowed_schema = allowed_schema
         self.read_only = read_only
+        self.query_tag = query_tag
 
     def _validate_schema_access(self, range_var: RangeVar) -> None:
-        """Проверяет, что таблица относится к разрешенной схеме.
+        """Check that the table belongs to an allowed schema.
 
         Args:
-            range_var: Узел RangeVar, представляющий таблицу.
+            range_var: RangeVar node representing the table.
 
         Raises:
-            ValueError: Если схема таблицы не разрешена.
+            ValueError: If the table schema is not allowed.
         """
         if not self.allowed_schema:
-            # Если allowed_schema не задан (ADMIN режим), разрешаем все
+            # If allowed_schema is not set (ADMIN mode), allow all
             return
 
         schemaname = range_var.schemaname
-        relname = range_var.relname
 
-        # Разрешенные системные схемы (всегда доступны)
-        ALLOWED_SYSTEM_SCHEMAS = {"pg_catalog", "information_schema"}
+        # Allowed system schemas (always available)
+        allowed_system_schemas = {"pg_catalog", "information_schema"}
 
         if schemaname is None:
-            # Неявная схема (без указания схемы) - разрешаем
-            # PostgreSQL использует search_path, который будет установлен в public
+            # Implicit schema (without schema specification) - allow
+            # PostgreSQL uses search_path, which will be set to public
             return
 
         schemaname_lower = schemaname.lower()
 
-        # Разрешаем системные схемы
-        if schemaname_lower in ALLOWED_SYSTEM_SCHEMAS:
+        # Allow system schemas
+        if schemaname_lower in allowed_system_schemas:
             return
 
-        # Проверяем, что схема совпадает с разрешенной
+        # Check that the schema matches the allowed one
         if schemaname_lower != self.allowed_schema.lower():
-            raise ValueError(
-                f"Access to schema '{schemaname}' is not allowed. "
-                f"Only '{self.allowed_schema}' schema is permitted."
+            error_msg = (
+                f"Access to schema '{schemaname}' is not allowed. Only '{self.allowed_schema}' schema is permitted."
             )
+            raise ValueError(error_msg)
 
-    def _validate_node(self, node: Node) -> None:
-        """Recursively validate a node and all its children"""
+    def _validate_node(self, node: Node) -> None:  # noqa: C901
+        """Recursively validate a node and all its children.
+
+        Args:
+            node: The node to validate.
+
+        Raises:
+            TypeError: If the node type is not allowed.
+        """
+        # Build allowed node types based on read_only mode
+        allowed_node_types = set(self.ALLOWED_NODE_TYPES)
+        if not self.read_only:
+            # Allow DML operations (INSERT, UPDATE, DELETE) when read_only=False
+            allowed_node_types.add(InsertStmt)
+            allowed_node_types.add(UpdateStmt)
+            allowed_node_types.add(DeleteStmt)
+
         # Check if node type is allowed
-        if not isinstance(node, tuple(self.ALLOWED_NODE_TYPES)):
-            raise ValueError(f"Node type {type(node)} is not allowed")
+        if not isinstance(node, tuple(allowed_node_types)):
+            error_msg = f"Node type {type(node)} is not allowed"
+            raise TypeError(error_msg)
 
         # Validate schema access for tables
         if isinstance(node, RangeVar):
@@ -938,11 +956,17 @@ class SafeSqlDriver(SqlDriver):
             A_Expr_Kind.AEXPR_ILIKE,
         ):
             # Get the right-hand side of the LIKE expression (the pattern)
-            if isinstance(node.rexpr, A_Const) and node.rexpr.val is not None and hasattr(node.rexpr.val, "sval") and node.rexpr.val.sval is not None:
+            if (
+                isinstance(node.rexpr, A_Const)
+                and node.rexpr.val is not None
+                and hasattr(node.rexpr.val, "sval")
+                and node.rexpr.val.sval is not None
+            ):
                 # Nothing to do for now
                 pass
             else:
-                raise ValueError("LIKE pattern must be a constant string")
+                error_msg = "LIKE pattern must be a constant string"
+                raise ValueError(error_msg)
 
         # Validate function calls
         if isinstance(node, FuncCall):
@@ -951,22 +975,25 @@ class SafeSqlDriver(SqlDriver):
             match = self.PG_CATALOG_PATTERN.match(func_name)
             unqualified_name = match.group(1) if match else func_name
             if unqualified_name not in self.ALLOWED_FUNCTIONS:
-                raise ValueError(f"Function {func_name} is not allowed")
+                error_msg = f"Function {func_name} is not allowed"
+                raise ValueError(error_msg)
 
         # Reject SELECT statements with locking clauses
         if isinstance(node, SelectStmt) and getattr(node, "lockingClause", None):
-            raise ValueError("Locking clause on select is prohibited")
+            error_msg = "Locking clause on select is prohibited"
+            raise ValueError(error_msg)
 
         # Reject EXPLAIN ANALYZE statements
         if isinstance(node, ExplainStmt):
             for option in node.options or []:
                 if isinstance(option, DefElem) and option.defname == "analyze":
-                    raise ValueError("EXPLAIN ANALYZE is not supported")
+                    error_msg = "EXPLAIN ANALYZE is not supported"
+                    raise ValueError(error_msg)
 
         # Reject CREATE EXTENSION statements
-        if isinstance(node, CreateExtensionStmt):
-            if node.extname not in self.ALLOWED_EXTENSIONS:
-                raise ValueError(f"CREATE EXTENSION {node.extname} is not supported")
+        if isinstance(node, CreateExtensionStmt) and node.extname not in self.ALLOWED_EXTENSIONS:
+            error_msg = f"CREATE EXTENSION {node.extname} is not supported"
+            raise ValueError(error_msg)
 
         # Recursively validate all attributes that might be nodes
         for attr_name in node.__slots__:
@@ -976,18 +1003,13 @@ class SafeSqlDriver(SqlDriver):
 
             try:
                 attr = getattr(node, attr_name)
-            except AttributeError:
+            except AttributeError as e:
                 # Skip attributes that don't exist (this is normal in pglast)
+                logger.debug("Attribute %s does not exist on node %s: %s", attr_name, type(node).__name__, e)
                 continue
 
             # Handle lists of nodes
-            if isinstance(attr, list):
-                for item in attr:
-                    if isinstance(item, Node):
-                        self._validate_node(item)
-
-            # Handle tuples of nodes
-            elif isinstance(attr, tuple):
+            if isinstance(attr, (list, tuple)):
                 for item in attr:
                     if isinstance(item, Node):
                         self._validate_node(item)
@@ -997,14 +1019,24 @@ class SafeSqlDriver(SqlDriver):
                 self._validate_node(attr)
 
     def _validate(self, query: str) -> None:
-        """Validate query is safe to execute"""
+        """Validate query is safe to execute.
+
+        Args:
+            query: SQL query string to validate.
+
+        Raises:
+            ValueError: If the query is not safe to execute.
+            pglast.parser.ParseError: If the query cannot be parsed.
+        """
+
+        def _raise_error(exc_type: type[Exception], message: str) -> None:
+            """Raise an exception with the given type and message."""
+            raise exc_type(message)
+
         try:
             # Parse the SQL using pglast
             parsed = pglast.parse_sql(query)
             # Pretty print the parsed SQL for debugging
-            # print("Parsed SQL:")
-            # import pprint
-            # pprint.pprint(parsed)
 
             # Build allowed statement types based on read_only mode
             allowed_stmt_types = set(self.ALLOWED_STMT_TYPES)
@@ -1018,46 +1050,61 @@ class SafeSqlDriver(SqlDriver):
             try:
                 for stmt in parsed:
                     stmt_node = stmt.stmt if isinstance(stmt, RawStmt) else stmt
-                    
+
                     # Check if the statement type is allowed
                     if not isinstance(stmt_node, tuple(allowed_stmt_types)):
                         if self.read_only:
                             error_msg = (
-                                "Only SELECT, ANALYZE, VACUUM, EXPLAIN, SHOW and other read-only statements are allowed. "
+                                "Only SELECT, ANALYZE, VACUUM, EXPLAIN, SHOW and other "
+                                "read-only statements are allowed. "
                                 f"Received: {type(stmt_node).__name__}"
                             )
                         else:
                             error_msg = (
-                                "Only SELECT, INSERT, UPDATE, DELETE, ANALYZE, VACUUM, EXPLAIN, SHOW and other allowed statements are permitted. "
+                                "Only SELECT, INSERT, UPDATE, DELETE, ANALYZE, VACUUM, EXPLAIN, "
+                                "SHOW and other allowed statements are permitted. "
                                 "DDL operations (CREATE, DROP, ALTER) are not allowed. "
                                 f"Received: {type(stmt_node).__name__}"
                             )
-                        raise ValueError(error_msg)
-                    
+                        _raise_error(TypeError, error_msg)
+
                     # Check for DDL operations (always prohibited, even in RW mode)
                     # We need to check the actual statement type
                     stmt_type_name = type(stmt_node).__name__
-                    if "Create" in stmt_type_name or "Drop" in stmt_type_name or "Alter" in stmt_type_name:
-                        # Allow CreateExtensionStmt as it's already in ALLOWED_STMT_TYPES
-                        if not isinstance(stmt_node, CreateExtensionStmt):
-                            raise ValueError(
-                                f"DDL operations are not allowed. Received: {stmt_type_name}"
-                            )
-                    
+                    # Allow CreateExtensionStmt as it's already in ALLOWED_STMT_TYPES
+                    if (
+                        "Create" in stmt_type_name or "Drop" in stmt_type_name or "Alter" in stmt_type_name
+                    ) and not isinstance(stmt_node, CreateExtensionStmt):
+                        error_msg = f"DDL operations are not allowed. Received: {stmt_type_name}"
+                        _raise_error(ValueError, error_msg)
+
                     self._validate_node(stmt)
             except Exception as e:
-                raise ValueError(f"Error validating query: {query}") from e
+                error_msg = f"Error validating query: {query}"
+                raise ValueError(error_msg) from e
 
         except pglast.parser.ParseError as e:
-            raise ValueError("Failed to parse SQL statement") from e
+            error_msg = "Failed to parse SQL statement"
+            raise ValueError(error_msg) from e
 
     async def execute_query(
         self,
         query: LiteralString,
         params: list[Any] | None = None,
-        force_readonly: bool = True,  # do not use value passed in
-    ) -> Optional[list[SqlDriver.RowResult]]:  # noqa: UP007
-        """Execute a query after validating it is safe"""
+        *,
+        force_readonly: bool = True,  # noqa: ARG002
+    ) -> list[SqlDriver.RowResult] | None:
+        """Execute a query after validating it is safe.
+
+        Args:
+            query: SQL query to execute.
+            params: Query parameters.
+            force_readonly: Ignored parameter for interface compatibility.
+                The value of self.read_only is used instead.
+
+        Returns:
+            List of RowResult objects or None on error.
+        """
         self._validate(query)
 
         # Set search_path if allowed_schema is specified (USER mode)
@@ -1073,52 +1120,77 @@ class SafeSqlDriver(SqlDriver):
             query_with_search_path = query
 
         # NOTE: Use self.read_only to determine force_readonly, not the parameter
+        # This ensures SafeSqlDriver controls read-only mode through its own property
         force_readonly_value = self.read_only
 
         if self.timeout:
             try:
                 async with asyncio.timeout(self.timeout):
                     return await self.sql_driver.execute_query(
-                        f"/* crystaldba */ {query_with_search_path}",
+                        f"/* {self.query_tag} */ {query_with_search_path}",
                         params=params,
                         force_readonly=force_readonly_value,
                     )
-            except asyncio.TimeoutError as e:
-                logger.warning(f"Query execution timed out after {self.timeout} seconds: {query[:100]}...")
-                raise ValueError(
+            except TimeoutError as e:
+                logger.warning("Query execution timed out after %s seconds: %s...", self.timeout, query[:100])
+                error_msg = (
                     f"Query execution timed out after {self.timeout} seconds in restricted mode. "
                     "Consider simplifying your query or increasing the timeout."
-                ) from e
+                )
+                raise ValueError(error_msg) from e
             except Exception as e:
-                logger.error(f"Error executing query: {e}")
+                logger.error("Error executing query: %s", e)
                 raise
         else:
             return await self.sql_driver.execute_query(
-                f"/* crystaldba */ {query_with_search_path}",
+                f"/* {self.query_tag} */ {query_with_search_path}",
                 params=params,
                 force_readonly=force_readonly_value,
             )
 
     @staticmethod
     def sql_to_query(sql: Composable) -> str:
-        """Convert a SQL string to a query string."""
+        """Convert a SQL string to a query string.
+
+        Args:
+            sql: The SQL to convert.
+
+        Returns:
+            The converted query.
+        """
         return sql.as_string()
 
     @staticmethod
     def param_sql_to_query(query: str, params: list[Any]) -> str:
-        """Convert a SQL string to a query string."""
+        """Convert a SQL string to a query string.
+
+        Args:
+            query: The query to convert.
+            params: The parameters to use.
+
+        Returns:
+            The converted query.
+        """
         # Convert each parameter to a Literal only if it's not already a Composable
         sql_params = [p if isinstance(p, Composable) else Literal(p) for p in params]
 
-        return SafeSqlDriver.sql_to_query(
-            SQL(query).format(*sql_params)  # type: ignore
-        )
+        return SafeSqlDriver.sql_to_query(SQL(query).format(*sql_params))
 
     @staticmethod
-    async def execute_param_query(sql_driver: SqlDriver, query: LiteralString, params: list[Any] | None = None) -> list[SqlDriver.RowResult] | None:
-        """Execute a query after validating it is safe"""
+    async def execute_param_query(
+        sql_driver: SqlDriver, query: LiteralString, params: list[Any] | None = None
+    ) -> list[SqlDriver.RowResult] | None:
+        """Execute a query after validating it is safe.
+
+        Args:
+            sql_driver: The SQL driver to use.
+            query: The query to execute.
+            params: The parameters to use.
+
+        Returns:
+            The results of the query.
+        """
         if params:
             query_params = SafeSqlDriver.param_sql_to_query(query, params)
-            return await sql_driver.execute_query(query_params)  # type: ignore
-        else:
-            return await sql_driver.execute_query(query)
+            return await sql_driver.execute_query(query_params)
+        return await sql_driver.execute_query(query)

@@ -1,17 +1,23 @@
+# Docker Compose configuration for TESTING ONLY
+# This sets up a test environment with PostgreSQL and MCP server
+# For production use, see Dockerfile and docker-entrypoint.sh
+
 services:
   postgres:
-    image: postgres:16-alpine
+    build:
+      context: ./docker/postgres
+      dockerfile: Dockerfile
     container_name: postgres-test
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_HOST_AUTH_METHOD: trust
     ports:
-      # PostgreSQL порт не публикуем наружу, только внутри Docker сети
-      - "5432"
+      - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./docker/postgres/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    command: postgres -c shared_preload_libraries=pg_stat_statements,hypopg
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -24,18 +30,21 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: postgres-mcp-test
-    depends_on:
-      postgres:
-        condition: service_healthy
+    container_name: postgres-mcp-server
+    environment:
+      COLUMNS: "200"
     ports:
       - "8000:8000"
     volumes:
-      - ./config.test.json:/app/config.json:ro
-    # Используем config.json для конфигурации, команда не нужна
+      - ./docker/config.json:/app/config.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - mcp-network
-    restart: unless-stopped
+    # Note: This docker-compose.yml is for TESTING ONLY
+    # docker-entrypoint.sh from Dockerfile will handle localhost replacement
+    # if needed, but config.json already uses correct hostnames (postgres)
 
 networks:
   mcp-network:

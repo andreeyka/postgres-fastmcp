@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from ..sql import SqlDriver
+
+if TYPE_CHECKING:
+    from postgres_mcp.sql import SqlDriver
 
 
 @dataclass
@@ -37,6 +40,7 @@ class ConnectionHealthMetrics:
 
 class ConnectionHealthCalc:
     """Calculator for database connection health checks."""
+
     def __init__(
         self,
         sql_driver: SqlDriver,
@@ -82,10 +86,9 @@ class ConnectionHealthCalc:
 
         if total > self.max_total_connections:
             return f"High number of connections: {total}"
-        elif idle > self.max_idle_connections:
+        if idle > self.max_idle_connections:
             return f"High number of connections idle in transaction: {idle}"
-        else:
-            return f"Connections healthy: {total} total, {idle} idle"
+        return f"Connections healthy: {total} total, {idle} idle"
 
     async def _get_total_connections(self) -> int:
         """Get the total number of database connections.

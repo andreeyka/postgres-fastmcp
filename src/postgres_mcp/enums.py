@@ -63,3 +63,4 @@ class TransportHttpApp(StrEnum):
 
     HTTP = "http"
     STREAMABLE_HTTP = "streamable-http"
+

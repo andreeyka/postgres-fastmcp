@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from ..sql import SqlDriver
+
+if TYPE_CHECKING:
+    from postgres_mcp.sql import SqlDriver
 
 
 @dataclass

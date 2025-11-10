@@ -1,21 +1,21 @@
 """Module for creating and registering MCP tools."""
 
-from __future__ import annotations
+from types import TracebackType
+from typing import Any, ClassVar, Literal, Self, cast
 
-import types
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast
+from fastmcp import Context, FastMCP
+from pydantic import Field
 
-from pydantic import Field, validate_call
-
-from postgres_mcp.artifacts import ErrorResult, ExplainPlanArtifact
+from postgres_mcp.common import ErrorResult
+from postgres_mcp.config import DatabaseConfig, settings
 from postgres_mcp.database_health import DatabaseHealthTool
-from postgres_mcp.explain import ExplainPlanTool
+from postgres_mcp.enums import AccessMode
+from postgres_mcp.explain import ExplainPlanArtifact, ExplainPlanTool
 from postgres_mcp.index.dta_calc import DatabaseTuningAdvisor
-from postgres_mcp.index.index_opt_base import MAX_NUM_INDEX_TUNING_QUERIES
+from postgres_mcp.index.index_opt_base import MAX_NUM_INDEX_TUNING_QUERIES, IndexTuningBase
 from postgres_mcp.index.llm_opt import LLMOptimizerTool
 from postgres_mcp.index.presentation import TextPresentation
 from postgres_mcp.logger import get_logger
-from postgres_mcp.mcp_types import AccessMode
 from postgres_mcp.sql import DbConnPool, SafeSqlDriver, SqlDriver, check_hypopg_installation_status
 from postgres_mcp.top_queries import TopQueriesCalc
 
@@ -65,12 +65,7 @@ from .queries import (
     QUERY_LIST_SEQUENCES,
     QUERY_LIST_TABLES_VIEWS,
 )
-
-
-if TYPE_CHECKING:
-    from fastmcp import FastMCP
-
-    from postgres_mcp.config import DatabaseConfig
+from .utils import decode_bytes_to_utf8
 
 
 logger = get_logger(__name__)
@@ -162,7 +157,7 @@ class ToolManager:
         self,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
-        exc_tb: types.TracebackType | None,
+        exc_tb: TracebackType | None,
     ) -> None:
         """Async context manager exit.
 
@@ -231,6 +226,7 @@ class ToolManager:
                 timeout=timeout,
                 allowed_schema=allowed_schema,
                 read_only=read_only,
+                query_tag=settings.name,
             )
 
         return self._sql_driver
@@ -262,7 +258,7 @@ class ToolManager:
             # ADMIN modes: return all schemas
             sql_driver = self.sql_driver
             rows = await sql_driver.execute_query(QUERY_LIST_SCHEMAS)
-            schemas = [row.cells for row in rows] if rows else []
+            schemas = [decode_bytes_to_utf8(row.cells) for row in rows] if rows else []
         except Exception as e:
             logger.error(LOG_ERROR_LISTING_SCHEMAS.format(str(e)))
             return self._format_error_response(str(e))
@@ -271,9 +267,15 @@ class ToolManager:
 
     async def list_objects(
         self,
-        schema_name: str = Field(description="Schema name"),
+        schema_name: str = Field(
+            description="Schema name as string value for filtering objects by database schema location"
+        ),
         object_type: str = Field(
-            description="Object type: 'table', 'view', 'sequence', or 'extension'", default="table"
+            default="table",
+            description=(
+                "Object type as string value: 'table' for tables, 'view' for views, "
+                "'sequence' for sequences, or 'extension' for PostgreSQL extensions"
+            ),
         ),
     ) -> ResponseType:
         """List objects of a given type in a schema."""
@@ -298,9 +300,9 @@ class ToolManager:
                 objects = (
                     [
                         {
-                            "schema": row.cells["table_schema"],
-                            "name": row.cells["table_name"],
-                            "type": row.cells["table_type"],
+                            "schema": decode_bytes_to_utf8(row.cells["table_schema"]),
+                            "name": decode_bytes_to_utf8(row.cells["table_name"]),
+                            "type": decode_bytes_to_utf8(row.cells["table_type"]),
                         }
                         for row in rows
                     ]
@@ -317,9 +319,9 @@ class ToolManager:
                 objects = (
                     [
                         {
-                            "schema": row.cells["sequence_schema"],
-                            "name": row.cells["sequence_name"],
-                            "data_type": row.cells["data_type"],
+                            "schema": decode_bytes_to_utf8(row.cells["sequence_schema"]),
+                            "name": decode_bytes_to_utf8(row.cells["sequence_name"]),
+                            "data_type": decode_bytes_to_utf8(row.cells["data_type"]),
                         }
                         for row in rows
                     ]
@@ -333,9 +335,9 @@ class ToolManager:
                 objects = (
                     [
                         {
-                            "name": row.cells["extname"],
-                            "version": row.cells["extversion"],
-                            "relocatable": row.cells["extrelocatable"],
+                            "name": decode_bytes_to_utf8(row.cells["extname"]),
+                            "version": decode_bytes_to_utf8(row.cells["extversion"]),
+                            "relocatable": decode_bytes_to_utf8(row.cells["extrelocatable"]),
                         }
                         for row in rows
                     ]
@@ -354,10 +356,21 @@ class ToolManager:
 
     async def get_object_details(  # noqa: C901
         self,
-        schema_name: str = Field(description="Schema name"),
-        object_name: str = Field(description="Object name"),
+        schema_name: str = Field(
+            description="Schema name as string value for identifying the database schema containing the object"
+        ),
+        object_name: str = Field(
+            description=(
+                "Object name as string value for identifying the specific database object "
+                "(table, view, sequence, or extension)"
+            )
+        ),
         object_type: str = Field(
-            description="Object type: 'table', 'view', 'sequence', or 'extension'", default="table"
+            default="table",
+            description=(
+                "Object type as string value: 'table' for tables, 'view' for views, "
+                "'sequence' for sequences, or 'extension' for PostgreSQL extensions"
+            ),
         ),
     ) -> ResponseType:
         """Get detailed information about a database object."""
@@ -382,10 +395,10 @@ class ToolManager:
                 columns = (
                     [
                         {
-                            "column": r.cells["column_name"],
-                            "data_type": r.cells["data_type"],
-                            "is_nullable": r.cells["is_nullable"],
-                            "default": r.cells["column_default"],
+                            "column": decode_bytes_to_utf8(r.cells["column_name"]),
+                            "data_type": decode_bytes_to_utf8(r.cells["data_type"]),
+                            "is_nullable": decode_bytes_to_utf8(r.cells["is_nullable"]),
+                            "default": decode_bytes_to_utf8(r.cells["column_default"]),
                         }
                         for r in col_rows
                     ]
@@ -400,17 +413,18 @@ class ToolManager:
                     [schema_name, object_name],
                 )
 
-                constraints = {}
+                constraints: dict[str, dict[str, Any]] = {}
                 if con_rows:
                     for row in con_rows:
-                        cname = row.cells["constraint_name"]
-                        ctype = row.cells["constraint_type"]
-                        col = row.cells["column_name"]
+                        cname = decode_bytes_to_utf8(row.cells["constraint_name"])
+                        ctype = decode_bytes_to_utf8(row.cells["constraint_type"])
+                        col = decode_bytes_to_utf8(row.cells["column_name"])
 
-                        if cname not in constraints:
-                            constraints[cname] = {"type": ctype, "columns": []}
-                        if col:
-                            constraints[cname]["columns"].append(col)
+                        if isinstance(cname, str) and isinstance(ctype, (str, int, float, bool, type(None))):
+                            if cname not in constraints:
+                                constraints[cname] = {"type": ctype, "columns": []}
+                            if col and isinstance(col, str):
+                                constraints[cname]["columns"].append(col)
 
                 constraints_list = [{"name": name, **data} for name, data in constraints.items()]
 
@@ -422,7 +436,13 @@ class ToolManager:
                 )
 
                 indexes = (
-                    [{"name": r.cells["indexname"], "definition": r.cells["indexdef"]} for r in idx_rows]
+                    [
+                        {
+                            "name": decode_bytes_to_utf8(r.cells["indexname"]),
+                            "definition": decode_bytes_to_utf8(r.cells["indexdef"]),
+                        }
+                        for r in idx_rows
+                    ]
                     if idx_rows
                     else []
                 )
@@ -444,11 +464,11 @@ class ToolManager:
                 if rows and rows[0]:
                     row = rows[0]
                     result = {
-                        "schema": row.cells["sequence_schema"],
-                        "name": row.cells["sequence_name"],
-                        "data_type": row.cells["data_type"],
-                        "start_value": row.cells["start_value"],
-                        "increment": row.cells["increment"],
+                        "schema": cast("str", decode_bytes_to_utf8(row.cells["sequence_schema"])),
+                        "name": cast("str", decode_bytes_to_utf8(row.cells["sequence_name"])),
+                        "data_type": cast("str", decode_bytes_to_utf8(row.cells["data_type"])),
+                        "start_value": cast("str | int", decode_bytes_to_utf8(row.cells["start_value"])),  # type: ignore[dict-item]
+                        "increment": cast("str | int", decode_bytes_to_utf8(row.cells["increment"])),  # type: ignore[dict-item]
                     }
                 else:
                     result = {}
@@ -463,9 +483,9 @@ class ToolManager:
                 if rows and rows[0]:
                     row = rows[0]
                     result = {
-                        "name": row.cells["extname"],
-                        "version": row.cells["extversion"],
-                        "relocatable": row.cells["extrelocatable"],
+                        "name": cast("str", decode_bytes_to_utf8(row.cells["extname"])),
+                        "version": cast("str", decode_bytes_to_utf8(row.cells["extversion"])),
+                        "relocatable": cast("str | bool", decode_bytes_to_utf8(row.cells["extrelocatable"])),  # type: ignore[dict-item]
                     }
                 else:
                     result = {}
@@ -477,20 +497,25 @@ class ToolManager:
             logger.error(LOG_ERROR_GETTING_OBJECT_DETAILS.format(str(e)))
             return self._format_error_response(str(e))
         else:
-            return result
+            # Декодируем весь результат для корректной сериализации в JSON
+            decoded_result = decode_bytes_to_utf8(result)
+            return cast("ResponseType", decoded_result)
 
     async def explain_query(
         self,
-        sql: str = Field(description="SQL query to explain"),
+        sql: str = Field(description="SQL query as string value to explain and analyze execution plan"),
         *,
         analyze: bool = Field(
-            description="When True, actually runs the query to show real execution statistics instead of estimates. "
-            "Takes longer but provides more accurate information.",
             default=False,
+            description=(
+                "Analyze flag as boolean value: when True, actually runs the query to show real execution "
+                "statistics instead of estimates. Takes longer but provides more accurate information. "
+                "Cannot be used together with hypothetical_indexes"
+            ),
         ),
         hypothetical_indexes: list[dict[str, Any]] = Field(  # noqa: B008
+            default_factory=list,
             description=DESC_HYPOTHETICAL_INDEXES,
-            default=[],
         ),
     ) -> ResponseType:
         """Explain the execution plan for a SQL query.
@@ -540,7 +565,13 @@ class ToolManager:
 
     async def execute_sql(
         self,
-        sql: str = Field(description="SQL to run", default="all"),
+        sql: str = Field(
+            default="all",
+            description=(
+                "SQL query as string value to execute against the database. For read-only modes, "
+                "only SELECT queries are allowed. For ADMIN_RW mode, any SQL statement (DDL, DML, DCL) is permitted"
+            ),
+        ),
     ) -> ResponseType:
         """Execute a SQL query against the database."""
         try:
@@ -548,34 +579,70 @@ class ToolManager:
             rows = await sql_driver.execute_query(sql)
             if rows is None:
                 return ERROR_NO_RESULTS
-            return [r.cells for r in rows]
+            # Декодируем байты в UTF-8 перед возвратом для корректной сериализации в JSON
+            return [decode_bytes_to_utf8(r.cells) for r in rows]
         except Exception as e:
             logger.error(LOG_ERROR_EXECUTING_QUERY.format(str(e)))
             return self._format_error_response(str(e))
 
-    @validate_call
     async def analyze_workload_indexes(
         self,
-        max_index_size_mb: int = Field(description="Max index size in MB", default=10000),
-        method: Literal["dta", "llm"] = Field(description="Method to use for analysis", default="dta"),
+        max_index_size_mb: int = Field(
+            default=10000,
+            description=(
+                "Maximum index size in megabytes as integer value for limiting recommended index sizes "
+                "(default 10000, must be greater than 0)"
+            ),
+            ge=1,
+        ),
+        method: Literal["dta", "llm"] = Field(
+            default="dta",
+            description=(
+                "Analysis method as string value: 'dta' for Database Tuning Advisor algorithm "
+                "or 'llm' for LLM-based optimization"
+            ),
+        ),
+        ctx: Context | None = None,
     ) -> ResponseType:
         """Analyze frequently executed queries in the database and recommend optimal indexes."""
         try:
             sql_driver = self.sql_driver
-            index_tuning = DatabaseTuningAdvisor(sql_driver) if method == "dta" else LLMOptimizerTool(sql_driver)
+            if method == "dta":
+                index_tuning: IndexTuningBase = DatabaseTuningAdvisor(sql_driver)
+            else:
+                if ctx is None:
+                    error_msg = "Context is required for LLM optimization method"
+                    logger.error(error_msg)
+                    return self._format_error_response(error_msg)
+                index_tuning = LLMOptimizerTool(sql_driver, ctx=ctx)
             dta_tool = TextPresentation(sql_driver, index_tuning)
-            result = await dta_tool.analyze_workload(max_index_size_mb=max_index_size_mb)  # type: ignore[no-untyped-call]
+            result = await dta_tool.analyze_workload(max_index_size_mb=max_index_size_mb)
             return cast("ResponseType", result)
         except Exception as e:
             logger.error(LOG_ERROR_ANALYZING_WORKLOAD.format(str(e)))
             return self._format_error_response(str(e))
 
-    @validate_call
     async def analyze_query_indexes(
         self,
-        queries: list[str] = Field(description="List of Query strings to analyze"),  # noqa: B008
-        max_index_size_mb: int = Field(description="Max index size in MB", default=10000),
-        method: Literal["dta", "llm"] = Field(description="Method to use for analysis", default="dta"),
+        queries: list[str] = Field(  # noqa: B008
+            description=f"List of SQL query strings to analyze (up to {MAX_NUM_INDEX_TUNING_QUERIES} queries allowed)"
+        ),
+        max_index_size_mb: int = Field(
+            default=10000,
+            description=(
+                "Maximum index size in megabytes as integer value for limiting recommended index sizes "
+                "(default 10000, must be greater than 0)"
+            ),
+            ge=1,
+        ),
+        method: Literal["dta", "llm"] = Field(
+            default="dta",
+            description=(
+                "Analysis method as string value: 'dta' for Database Tuning Advisor algorithm "
+                "or 'llm' for LLM-based optimization"
+            ),
+        ),
+        ctx: Context | None = None,
     ) -> ResponseType:
         """Analyze a list of SQL queries and recommend optimal indexes."""
         if len(queries) == 0:
@@ -585,9 +652,16 @@ class ToolManager:
 
         try:
             sql_driver = self.sql_driver
-            index_tuning = DatabaseTuningAdvisor(sql_driver) if method == "dta" else LLMOptimizerTool(sql_driver)
+            if method == "dta":
+                index_tuning: IndexTuningBase = DatabaseTuningAdvisor(sql_driver)
+            else:
+                if ctx is None:
+                    error_msg = "Context is required for LLM optimization method"
+                    logger.error(error_msg)
+                    return self._format_error_response(error_msg)
+                index_tuning = LLMOptimizerTool(sql_driver, ctx=ctx)
             dta_tool = TextPresentation(sql_driver, index_tuning)
-            result = await dta_tool.analyze_queries(queries=queries, max_index_size_mb=max_index_size_mb)  # type: ignore[no-untyped-call]
+            result = await dta_tool.analyze_queries(queries=queries, max_index_size_mb=max_index_size_mb)
             return cast("ResponseType", result)
         except Exception as e:
             logger.error(LOG_ERROR_ANALYZING_QUERIES.format(str(e)))
@@ -596,8 +670,12 @@ class ToolManager:
     async def analyze_db_health(
         self,
         health_type: str = Field(
-            description="Optional. Valid values are: " + HEALTH_TYPE_VALUES + ".",
             default="all",
+            description=(
+                f"Health check type as string value: single check or comma-separated list. "
+                f"Valid values are: {HEALTH_TYPE_VALUES}. Use 'all' for comprehensive health check, "
+                f"or specify individual checks like 'index,connection' for targeted analysis"
+            ),
         ),
     ) -> ResponseType:
         """Analyze database health for specified components.
@@ -606,20 +684,26 @@ class ToolManager:
             health_type: Comma-separated list of health check types to perform.
                         Valid values: index, connection, vacuum, sequence, replication, buffer, constraint, all
         """
-        health_tool = DatabaseHealthTool(self.sql_driver)  # type: ignore[no-untyped-call]
+        health_tool = DatabaseHealthTool(self.sql_driver)
         return await health_tool.health(health_type=health_type)
 
     async def get_top_queries(
         self,
         sort_by: str = Field(
-            description=(
-                "Ranking criteria: 'total_time' for total execution time or 'mean_time' "
-                "for mean execution time per call, or 'resources' for resource-intensive queries"
-            ),
             default="resources",
+            description=(
+                "Ranking criteria as string value: 'total_time' for total execution time across all calls, "
+                "'mean_time' for mean execution time per call, or 'resources' for resource-intensive queries "
+                "based on I/O, WAL, and execution time"
+            ),
         ),
         limit: int = Field(
-            description="Number of queries to return when ranking based on mean_time or total_time", default=10
+            default=10,
+            description=(
+                "Number of queries to return as integer value when ranking based on mean_time or total_time "
+                "(default 10, must be greater than 0)"
+            ),
+            ge=1,
         ),
     ) -> ResponseType:
         """Reports the slowest or most resource-intensive queries using data from the 'pg_stat_statements' extension."""
@@ -642,7 +726,7 @@ class ToolManager:
         else:
             return result
 
-    def register_tools(self, mcp: FastMCP) -> int:
+    def register_tools(self, mcp: FastMCP, prefix: str | None = None) -> int:
         """Register all tools directly with FastMCP server using mcp.tool().
 
         Automatically registers all enabled methods listed in _tools with their
@@ -650,6 +734,9 @@ class ToolManager:
 
         Args:
             mcp: FastMCP server instance to register tools with.
+            prefix: Optional prefix for the database server. If provided, adds prefix
+                information to tool descriptions to indicate which database the tool
+                belongs to and that tools with the same prefix should be used together.
 
         Returns:
             Number of registered tools.
@@ -661,7 +748,20 @@ class ToolManager:
                 continue
 
             method = getattr(self, method_name)
-            description = tool_config["description"]
+            base_description = tool_config["description"]
+
+            # Add prefix information to description if prefix is provided
+            if prefix:
+                prefix_info = (
+                    f"\n\nIMPORTANT: This tool belongs to database '{prefix}'. "
+                    f"All tools with the same prefix '{prefix}' must be used together for operations on this database. "
+                    f"Tools may differ only by their prefix (database identifier). "
+                    f"Always use tools with the same prefix together and do not mix tools from different prefixes."
+                )
+                description = base_description + prefix_info
+            else:
+                description = base_description
+
             mcp.tool(method, description=description)
             registered_count += 1
 

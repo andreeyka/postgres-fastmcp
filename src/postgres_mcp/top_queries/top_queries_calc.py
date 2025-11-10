@@ -1,17 +1,17 @@
+from __future__ import annotations
+
 import logging
 from typing import Literal
-from typing import LiteralString
-from typing import Union
-from typing import cast
 
-from ..sql import SafeSqlDriver
-from ..sql import SqlDriver
-from ..sql.extension_utils import check_extension
-from ..sql.extension_utils import get_postgres_version
+from postgres_mcp.sql import SafeSqlDriver, SqlDriver
+from postgres_mcp.sql.extension_utils import check_extension, get_postgres_version
+
 
 logger = logging.getLogger(__name__)
 
 PG_STAT_STATEMENTS = "pg_stat_statements"
+# PostgreSQL version where column names changed in pg_stat_statements
+PG_VERSION_COLUMN_CHANGE = 13
 
 install_pg_stat_statements_message = (
     "The pg_stat_statements extension is required to "
@@ -32,7 +32,12 @@ install_pg_stat_statements_message = (
 class TopQueriesCalc:
     """Tool for retrieving the slowest SQL queries."""
 
-    def __init__(self, sql_driver: Union[SqlDriver, SafeSqlDriver]):
+    def __init__(self, sql_driver: SqlDriver | SafeSqlDriver) -> None:
+        """Initialize TopQueriesCalc.
+
+        Args:
+            sql_driver: SQL driver instance to use for queries.
+        """
         self.sql_driver = sql_driver
 
     async def get_top_queries_by_time(self, limit: int = 10, sort_by: Literal["total", "mean"] = "mean") -> str:
@@ -47,7 +52,7 @@ class TopQueriesCalc:
             A string with the top queries or installation instructions
         """
         try:
-            logger.debug(f"Getting top queries by time. limit={limit}, sort_by={sort_by}")
+            logger.debug("Getting top queries by time. limit=%s, sort_by=%s", limit, sort_by)
             extension_status = await check_extension(
                 self.sql_driver,
                 PG_STAT_STATEMENTS,
@@ -55,16 +60,16 @@ class TopQueriesCalc:
             )
 
             if not extension_status.is_installed:
-                logger.warning(f"Extension {PG_STAT_STATEMENTS} is not installed")
+                logger.warning("Extension %s is not installed", PG_STAT_STATEMENTS)
                 # Return installation instructions if the extension is not installed
                 return install_pg_stat_statements_message
 
             # Check PostgreSQL version to determine column names
             pg_version = await get_postgres_version(self.sql_driver)
-            logger.debug(f"PostgreSQL version: {pg_version}")
+            logger.debug("PostgreSQL version: %s", pg_version)
 
             # Column names changed in PostgreSQL 13
-            if pg_version >= 13:
+            if pg_version >= PG_VERSION_COLUMN_CHANGE:
                 # PostgreSQL 13 and newer
                 total_time_col = "total_exec_time"
                 mean_time_col = "mean_exec_time"
@@ -73,11 +78,12 @@ class TopQueriesCalc:
                 total_time_col = "total_time"
                 mean_time_col = "mean_time"
 
-            logger.debug(f"Using time columns: total={total_time_col}, mean={mean_time_col}")
+            logger.debug("Using time columns: total=%s, mean=%s", total_time_col, mean_time_col)
 
             # Determine which column to sort by based on sort_by parameter and version
             order_by_column = total_time_col if sort_by == "total" else mean_time_col
 
+            # Column names are validated and come from version check, not user input
             query = f"""
                 SELECT
                     query,
@@ -88,28 +94,26 @@ class TopQueriesCalc:
                 FROM pg_stat_statements
                 ORDER BY {order_by_column} DESC
                 LIMIT {{}};
-            """
-            logger.debug(f"Executing query: {query}")
+            """  # noqa: S608
+            logger.debug("Executing query: %s", query)
             slow_query_rows = await SafeSqlDriver.execute_param_query(
                 self.sql_driver,
                 query,
                 [limit],
             )
             slow_queries = [row.cells for row in slow_query_rows] if slow_query_rows else []
-            logger.info(f"Found {len(slow_queries)} slow queries")
+            logger.info("Found %s slow queries", len(slow_queries))
 
             # Create result description based on sort criteria
-            if sort_by == "total":
-                criteria = "total execution time"
-            else:
-                criteria = "mean execution time per call"
+            criteria = "total execution time" if sort_by == "total" else "mean execution time per call"
 
             result = f"Top {len(slow_queries)} slowest queries by {criteria}:\n"
             result += str(slow_queries)
+        except Exception:
+            logger.exception("Error getting slow queries")
+            return "Error getting slow queries"
+        else:
             return result
-        except Exception as e:
-            logger.error(f"Error getting slow queries: {e}", exc_info=True)
-            return f"Error getting slow queries: {e}"
 
     async def get_top_resource_queries(self, frac_threshold: float = 0.05) -> str:
         """Reports the most time consuming queries based on a resource blend.
@@ -120,9 +124,8 @@ class TopQueriesCalc:
         Returns:
             A string with the resource-heavy queries or error message
         """
-
         try:
-            logger.debug(f"Getting top resource queries with threshold {frac_threshold}")
+            logger.debug("Getting top resource queries with threshold %s", frac_threshold)
             extension_status = await check_extension(
                 self.sql_driver,
                 PG_STAT_STATEMENTS,
@@ -130,16 +133,16 @@ class TopQueriesCalc:
             )
 
             if not extension_status.is_installed:
-                logger.warning(f"Extension {PG_STAT_STATEMENTS} is not installed")
+                logger.warning("Extension %s is not installed", PG_STAT_STATEMENTS)
                 # Return installation instructions if the extension is not installed
                 return install_pg_stat_statements_message
 
             # Check PostgreSQL version to determine column names
             pg_version = await get_postgres_version(self.sql_driver)
-            logger.debug(f"PostgreSQL version: {pg_version}")
+            logger.debug("PostgreSQL version: %s", pg_version)
 
             # Column names changed in PostgreSQL 13
-            if pg_version >= 13:
+            if pg_version >= PG_VERSION_COLUMN_CHANGE:
                 # PostgreSQL 13 and newer
                 total_time_col = "total_exec_time"
                 mean_time_col = "mean_exec_time"
@@ -148,9 +151,9 @@ class TopQueriesCalc:
                 total_time_col = "total_time"
                 mean_time_col = "mean_time"
 
-            query = cast(
-                LiteralString,
-                f"""
+            # Column names are validated and come from version check, not user input
+            # frac_threshold is a float parameter, not user-provided SQL
+            query = f"""
                 WITH resource_fractions AS (
                     SELECT
                         query,
@@ -194,18 +197,17 @@ class TopQueriesCalc:
                     OR shared_blks_dirtied_frac > {frac_threshold}
                     OR total_wal_bytes_frac > {frac_threshold}
                 ORDER BY total_exec_time DESC
-            """,
-            )
+            """  # noqa: E501, S608
 
-            logger.debug(f"Executing query: {query}")
+            logger.debug("Executing query: %s", query)
             slow_query_rows = await SafeSqlDriver.execute_param_query(
                 self.sql_driver,
                 query,
             )
             resource_queries = [row.cells for row in slow_query_rows] if slow_query_rows else []
-            logger.info(f"Found {len(resource_queries)} resource-intensive queries")
+            logger.info("Found %s resource-intensive queries", len(resource_queries))
 
             return str(resource_queries)
-        except Exception as e:
-            logger.error(f"Error getting resource-intensive queries: {e}", exc_info=True)
-            return f"Error resource-intensive queries: {e}"
+        except Exception:
+            logger.exception("Error getting resource-intensive queries")
+            return "Error resource-intensive queries"

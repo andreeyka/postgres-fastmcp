@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from postgres_mcp.config import Settings, settings
+from postgres_mcp.enums import TransportConfig
 from postgres_mcp.logger import get_logger
-from postgres_mcp.mcp_types import TransportConfig
 from postgres_mcp.server.base import BaseServerBuilder
 
 
@@ -18,9 +18,9 @@ class StdioServerBuilder(BaseServerBuilder):
     """
 
     async def run(self) -> None:
-        """Запустить STDIO сервер.
+        """Run STDIO server.
 
-        Реализация абстрактного метода из BaseServerBuilder.
+        Implementation of abstract method from BaseServerBuilder.
         """
         # Register tool mode servers
         self.register_tool_mode_servers(transport_type=TransportConfig.STDIO)

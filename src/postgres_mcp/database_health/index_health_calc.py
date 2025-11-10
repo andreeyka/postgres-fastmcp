@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ..sql import SafeSqlDriver
-from ..sql import SqlDriver
+from postgres_mcp.sql import SafeSqlDriver
+
+if TYPE_CHECKING:
+    from postgres_mcp.sql import SqlDriver
 
 
 class IndexHealthCalc:
@@ -26,7 +28,9 @@ class IndexHealthCalc:
         if not invalid_indexes:
             return "No invalid indexes found."
 
-        return "Invalid indexes found: " + "\n".join([f"{idx['name']} on {idx['table']} is invalid." for idx in invalid_indexes])
+        return "Invalid indexes found: " + "\n".join(
+            [f"{idx['name']} on {idx['table']} is invalid." for idx in invalid_indexes]
+        )
 
     async def duplicate_index_check(self) -> str:
         """Check for duplicate or redundant indexes in the database.
@@ -38,7 +42,7 @@ class IndexHealthCalc:
         dup_indexes = []
 
         # Group indexes by schema and table
-        indexes_by_table = {}
+        indexes_by_table: dict[tuple[str, str], list[dict[str, Any]]] = {}
         for idx in indexes:
             key = (idx["schema"], idx["table"])
             if key not in indexes_by_table:
@@ -46,7 +50,9 @@ class IndexHealthCalc:
             indexes_by_table[key].append(idx)
 
         # Check each valid non-primary/unique index for duplicates
-        for index in [i for i in indexes if i["valid"] and not i["primary"] and not i["unique"]]:
+        for index in [
+            i for i in indexes if i["valid"] and not i["primary"] and not i["unique"]
+        ]:
             table_indexes = indexes_by_table[(index["schema"], index["table"])]
 
             # Find covering indexes
@@ -58,16 +64,17 @@ class IndexHealthCalc:
                     and covering_idx["using"] == index["using"]
                     and covering_idx["indexprs"] == index["indexprs"]
                     and covering_idx["indpred"] == index["indpred"]
-                ):
-                    # Add to duplicates if conditions are met
-                    if (
+                    and (
                         covering_idx["columns"] != index["columns"]
                         or index["name"] > covering_idx["name"]
                         or covering_idx["primary"]
                         or covering_idx["unique"]
-                    ):
-                        dup_indexes.append({"unneeded_index": index, "covering_index": covering_idx})
-                        break
+                    )
+                ):
+                    dup_indexes.append(
+                        {"unneeded_index": index, "covering_index": covering_idx}
+                    )
+                    break
 
         if not dup_indexes:
             return "No duplicate indexes found."
@@ -82,11 +89,11 @@ class IndexHealthCalc:
         )
 
         result = ["Duplicate indexes found:"]
-        for dup in sorted_dups:
-            result.append(
-                f"Index '{dup['unneeded_index']['name']}' on table '{dup['unneeded_index']['table']}' "
-                f"is covered by index '{dup['covering_index']['name']}'"
-            )
+        result.extend(
+            f"Index '{dup['unneeded_index']['name']}' on table '{dup['unneeded_index']['table']}' "
+            f"is covered by index '{dup['covering_index']['name']}'"
+            for dup in sorted_dups
+        )
 
         return "\n".join(result)
 
@@ -231,7 +238,7 @@ class IndexHealthCalc:
             ORDER BY
                 wastedbytes DESC,
                 index_name
-        """,
+        """,  # noqa: E501
             [min_size],
         )
 
@@ -244,7 +251,10 @@ class IndexHealthCalc:
         for idx in bloated_indexes_dicts:
             bloat_mb = int(idx["bloat_bytes"]) / (1024 * 1024)
             total_mb = int(idx["index_bytes"]) / (1024 * 1024)
-            result.append(f"Index '{idx['index']}' on table '{idx['table']}' has {bloat_mb:.1f}MB bloat out of {total_mb:.1f}MB total size")
+            result.append(
+                f"Index '{idx['index']}' on table '{idx['table']}' has {bloat_mb:.1f}MB bloat "
+                f"out of {total_mb:.1f}MB total size"
+            )
 
         return "\n".join(result)
 
@@ -294,6 +304,19 @@ class IndexHealthCalc:
         # Process columns
         for idx in indexes:
             cols = idx["columns"]
+            # Handle None, bytes, or string types
+            if cols is None:
+                idx["columns"] = []
+                continue
+            
+            # Convert bytes to string if needed
+            if isinstance(cols, bytes):
+                cols = cols.decode("utf-8")
+            
+            # Ensure it's a string
+            if not isinstance(cols, str):
+                cols = str(cols)
+            
             cols = cols.replace(") WHERE (", " WHERE ").split(", ")
             # Unquote column names
             idx["columns"] = [col.strip('"') for col in cols]
@@ -358,7 +381,8 @@ class IndexHealthCalc:
                 continue
             size_mb = int(idx["size_bytes"]) / (1024 * 1024)
             result.append(
-                f"Index '{idx['index']}' on table '{idx['table']}' has only been scanned {idx['index_scans']} times and uses {size_mb:.1f}MB of space"
+                f"Index '{idx['index']}' on table '{idx['table']}' has only been scanned "
+                f"{idx['index_scans']} times and uses {size_mb:.1f}MB of space"
             )
 
         return "\n".join(result)

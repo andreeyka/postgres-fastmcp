@@ -12,7 +12,7 @@ import pytest
 import pytest_asyncio
 from pglast import parse_sql
 
-from postgres_mcp.artifacts import ExplainPlanArtifact
+from postgres_mcp.explain import ExplainPlanArtifact
 from postgres_mcp.index.dta_calc import ColumnCollector
 from postgres_mcp.index.dta_calc import ConditionColumnCollector
 from postgres_mcp.index.dta_calc import DatabaseTuningAdvisor

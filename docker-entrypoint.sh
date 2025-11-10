@@ -1,7 +1,9 @@
 #!/bin/bash
 
-# Don't exit immediately so we can debug issues
-# set -e
+# Docker entrypoint script for postgres-mcp
+# Handles localhost replacement in connection strings and config.json
+
+set -euo pipefail
 
 # Function to replace localhost in a string with the Docker host
 replace_localhost() {
@@ -33,12 +35,57 @@ replace_localhost() {
     return 1
 }
 
-# Create a new array for the processed arguments
+# Process config.json if it exists and contains localhost
+CONFIG_FILE="${CONFIG_FILE:-/app/config.json}"
+if [[ -f "$CONFIG_FILE" ]]; then
+    if grep -q "localhost" "$CONFIG_FILE" 2>/dev/null; then
+        echo "Found localhost in config.json, processing..." >&2
+        docker_host=""
+        
+        # Determine Docker host
+        if ping -c 1 -w 1 host.docker.internal >/dev/null 2>&1; then
+            docker_host="host.docker.internal"
+        elif ping -c 1 -w 1 172.17.0.1 >/dev/null 2>&1; then
+            docker_host="172.17.0.1"
+        fi
+        
+        if [[ -n "$docker_host" ]]; then
+            # Check if file is writable
+            if [[ -w "$CONFIG_FILE" ]]; then
+                # Use sed to replace localhost in config.json (only in database_uri fields)
+                # This preserves JSON structure
+                sed -i.bak "s|postgresql://\([^:]*\):\([^@]*\)@localhost|postgresql://\1:\2@${docker_host}|g" "$CONFIG_FILE"
+                sed -i.bak "s|postgres://\([^:]*\):\([^@]*\)@localhost|postgres://\1:\2@${docker_host}|g" "$CONFIG_FILE"
+                rm -f "${CONFIG_FILE}.bak"
+                echo "Updated config.json: replaced localhost with ${docker_host}" >&2
+            else
+                # File is read-only (e.g., mounted volume), create a writable copy in working directory
+                # Application looks for config.json in current working directory (/app)
+                WORKING_CONFIG="/app/config.json"
+                cp "$CONFIG_FILE" "$WORKING_CONFIG"
+                sed -i "s|postgresql://\([^:]*\):\([^@]*\)@localhost|postgresql://\1:\2@${docker_host}|g" "$WORKING_CONFIG"
+                sed -i "s|postgres://\([^:]*\):\([^@]*\)@localhost|postgres://\1:\2@${docker_host}|g" "$WORKING_CONFIG"
+                echo "Created writable config.json with localhost replaced: ${docker_host}" >&2
+                echo "Using: $WORKING_CONFIG" >&2
+            fi
+        fi
+    fi
+fi
+
+# Check and replace localhost in DATABASE_URI environment variable if it exists
+if [[ -n "${DATABASE_URI:-}" && "$DATABASE_URI" == *"postgres"*"://"*"localhost"* ]]; then
+    echo "Found localhost in DATABASE_URI: $DATABASE_URI" >&2
+    new_uri=$(replace_localhost "$DATABASE_URI")
+    if [[ $? -eq 0 ]]; then
+        export DATABASE_URI="$new_uri"
+    fi
+fi
+
+# Process command-line arguments for postgres:// or postgresql:// URLs that contain localhost
 processed_args=()
 processed_args+=("$1")
 shift 1
 
-# Process remaining command-line arguments for postgres:// or postgresql:// URLs that contain localhost
 for arg in "$@"; do
     if [[ "$arg" == *"postgres"*"://"*"localhost"* ]]; then
         echo "Found localhost in database connection: $arg" >&2
@@ -53,39 +100,17 @@ for arg in "$@"; do
     fi
 done
 
-# Check and replace localhost in DATABASE_URI if it exists
-if [[ -n "$DATABASE_URI" && "$DATABASE_URI" == *"postgres"*"://"*"localhost"* ]]; then
-    echo "Found localhost in DATABASE_URI: $DATABASE_URI" >&2
-    new_uri=$(replace_localhost "$DATABASE_URI")
-    if [[ $? -eq 0 ]]; then
-        export DATABASE_URI="$new_uri"
+# Ensure host is set to 0.0.0.0 for HTTP transport when running in Docker
+# This allows the server to be accessible from outside the container
+if [[ " ${processed_args[@]} " =~ " --transport http " ]] || \
+   [[ " ${processed_args[@]} " =~ " --transport=http " ]] || \
+   [[ ! " ${processed_args[@]} " =~ " --transport " ]]; then
+    # HTTP transport is default or explicitly set
+    if [[ ! " ${processed_args[@]} " =~ " --host " ]] && \
+       [[ ! " ${processed_args[@]} " =~ " --host=" ]]; then
+        echo "HTTP transport detected, adding --host=0.0.0.0 for Docker" >&2
+        processed_args+=("--host=0.0.0.0")
     fi
-fi
-
-# Check if SSE transport is specified and --sse-host is not already set
-has_sse=false
-has_sse_host=false
-
-for arg in "${processed_args[@]}"; do
-    if [[ "$arg" == "--transport" ]]; then
-        # Check next argument for "sse"
-        for next_arg in "${processed_args[@]}"; do
-            if [[ "$next_arg" == "sse" ]]; then
-                has_sse=true
-                break
-            fi
-        done
-    elif [[ "$arg" == "--transport=sse" ]]; then
-        has_sse=true
-    elif [[ "$arg" == "--sse-host"* ]]; then
-        has_sse_host=true
-    fi
-done
-
-# Add --sse-host if needed
-if [[ "$has_sse" == true ]] && [[ "$has_sse_host" == false ]]; then
-    echo "SSE transport detected, adding --sse-host=0.0.0.0" >&2
-    processed_args+=("--sse-host=0.0.0.0")
 fi
 
 echo "----------------" >&2
@@ -94,16 +119,4 @@ echo "${processed_args[@]}" >&2
 echo "----------------" >&2
 
 # Execute the command with the processed arguments
-"${processed_args[@]}"
-
-# Capture exit code from the Python process
-exit_code=$?
-
-# If the Python process failed, print additional debug info
-if [ $exit_code -ne 0 ]; then
-    echo "ERROR: Command failed with exit code $exit_code" >&2
-    echo "Command was: ${processed_args[@]}" >&2
-fi
-
-# Return the exit code from the Python process
-exit $exit_code
+exec "${processed_args[@]}"

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from psycopg.sql import Identifier
 
-from ..sql import SafeSqlDriver
-from ..sql import SqlDriver
+from postgres_mcp.sql import SafeSqlDriver
+
+if TYPE_CHECKING:
+    from postgres_mcp.sql import SqlDriver
 
 
 @dataclass
@@ -46,6 +49,7 @@ class SequenceMetrics:
 
 class SequenceHealthCalc:
     """Calculator for database sequence health checks."""
+
     def __init__(self, sql_driver: SqlDriver, threshold: float = 0.9) -> None:
         """Initialize sequence health calculator.
 
@@ -127,7 +131,9 @@ class SequenceHealthCalc:
                 continue
 
             # Determine max value based on column type
-            max_value = 2147483647 if seq["column_type"] == "integer" else 9223372036854775807
+            max_value = (
+                2147483647 if seq["column_type"] == "integer" else 9223372036854775807
+            )
 
             # Get sequence attributes
             attrs = await SafeSqlDriver.execute_param_query(

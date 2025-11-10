@@ -1,0 +1,31 @@
+{
+    "name": "postgres-fastmcp",
+    "mask_error_details": true,
+    "endpoint": "mcp",
+    "transport": "http",
+    "databases": {
+        "user_ro_db": {
+            "database_uri": "postgresql://user_ro:password@postgres:5432/user_ro_db",
+            "streamable": false,
+            "access_mode": "user_ro"
+        },
+        "user_rw_db": {
+            "database_uri": "postgresql://user_rw:password@postgres:5432/user_rw_db",
+            "streamable": false,
+            "access_mode": "user_rw"
+        },
+        "admin_ro_db": {
+            "database_uri": "postgresql://admin_ro:password@postgres:5432/admin_ro_db",
+            "streamable": false,
+            "access_mode": "admin_ro"
+        },
+        "admin_rw_db": {
+            "database_uri": "postgresql://postgres:postgres@postgres:5432/admin_rw_db",
+            "streamable": false,
+            "access_mode": "admin_rw"
+        }
+    },
+    "host": "0.0.0.0",
+    "port": 8000,
+    "workers": 1
+}

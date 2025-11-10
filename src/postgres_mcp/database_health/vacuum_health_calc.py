@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from ..sql import SafeSqlDriver
-from ..sql import SqlDriver
+from postgres_mcp.sql import SafeSqlDriver
+
+
+if TYPE_CHECKING:
+    from postgres_mcp.sql import SqlDriver
 
 
 @dataclass
@@ -25,6 +29,7 @@ class TransactionIdMetrics:
 
 class VacuumHealthCalc:
     """Calculator for database vacuum and transaction ID health checks."""
+
     def __init__(
         self,
         sql_driver: SqlDriver,
@@ -54,11 +59,11 @@ class VacuumHealthCalc:
             return "All tables have healthy transaction ID age."
 
         result = ["Tables approaching transaction ID wraparound:"]
-        for metric in unhealthy:
-            result.append(
-                f"Table '{metric.schema}.{metric.table}' has {metric.transactions_left:,} transactions "
-                f"remaining before wraparound (threshold: {self.threshold:,})"
-            )
+        result.extend(
+            f"Table '{metric.schema}.{metric.table}' has {metric.transactions_left:,} transactions "
+            f"remaining before wraparound (threshold: {self.threshold:,})"
+            for metric in unhealthy
+        )
         return "\n".join(result)
 
     async def _get_transaction_id_metrics(self) -> list[TransactionIdMetrics]:
