@@ -227,12 +227,12 @@ Determines SQL access level:
 
 #### Combination Matrix
 
-| Role | Access Mode | Equivalent | Tools | SQL Access | Schemas |
-|------|-------------|------------|-------|------------|---------|
-| `user` | `restricted` | USER_RO | Basic (4) | Read-only | `public` |
-| `user` | `unrestricted` | USER_RW | Basic (4) | Read-write | `public` |
-| `full` | `restricted` | ADMIN_RO | All (9) | Read-only | All |
-| `full` | `unrestricted` | ADMIN_RW | All (9) | Full access (DDL) | All |
+| Role | Access Mode | Tools | SQL Access | Schemas |
+|------|-------------|-------|------------|---------|
+| `user` | `restricted` | Basic (4) | Read-only | `public` |
+| `user` | `unrestricted` | Basic (4) | Read-write | `public` |
+| `full` | `restricted` | All (9) | Read-only | All |
+| `full` | `unrestricted` | All (9) | Full access (DDL) | All |
 
 **Default values:**
 - `role`: `"user"` (default)
@@ -288,8 +288,26 @@ Streamable-HTTP provides streaming data transfer for large responses. This is us
 - Long-running operations
 - Real-time data streaming
 
-**Important:** Streamable-HTTP can only be used for servers with `endpoint=true` (separate endpoints).
+**Note:** Currently, MCP tools do not use streaming. Streamable-HTTP transport is available for future use and protocol-level streaming support.
 
+**Global streamable-http transport:**
+```json
+{
+    "transport": "streamable-http",
+    "databases": {
+        "db1": {
+            "database_uri": "postgresql://...",
+            "endpoint": false
+        },
+        "db2": {
+            "database_uri": "postgresql://...",
+            "endpoint": false
+        }
+    }
+}
+```
+
+**Per-server streamable-http transport (for servers with endpoint=true):**
 ```json
 {
     "transport": "http",
@@ -308,7 +326,7 @@ Streamable-HTTP provides streaming data transfer for large responses. This is us
 }
 ```
 
-Each server can have its own transport type (`"http"` or `"streamable-http"`). The analytics server will be available at `http://localhost:8000/analytics/mcp` with streaming support.
+Each server can have its own transport type (`"http"` or `"streamable-http"`). When using streamable-http globally, all servers in the main endpoint will use streaming transport. For separate endpoints, each server can specify its own transport type.
 
 #### STDIO Transport
 
@@ -570,6 +588,8 @@ When `endpoint=true`, each database gets its own HTTP endpoint. This allows diff
 - Each endpoint can have different transport types
 - Tools always prefixed with server name
 
+**Note:** Currently, MCP tools do not use streaming. Streamable-HTTP transport is available for future use and protocol-level streaming support.
+
 ### Tool Prefixes
 
 Tool prefixes are automatically added based on the server name to prevent conflicts when multiple MCP servers are connected to a single agent.
@@ -730,8 +750,10 @@ Each application gets its own endpoint:
 ```
 
 Endpoints:
-- Analytics: `http://localhost:8000/analytics/mcp` (streaming enabled)
+- Analytics: `http://localhost:8000/analytics/mcp` (streamable-http transport)
 - Main: `http://localhost:8000/main/mcp` (standard HTTP)
+
+**Note:** Currently, MCP tools do not use streaming. Streamable-HTTP transport is available for future use.
 
 ### Example 3: STDIO Mode with Multiple Databases
 
