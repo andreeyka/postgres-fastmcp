@@ -7,7 +7,7 @@ import pytest_asyncio
 from pydantic import SecretStr
 
 from postgres_mcp.config import DatabaseConfig
-from postgres_mcp.enums import AccessMode
+from postgres_mcp.enums import AccessMode, UserRole
 from postgres_mcp.explain import ExplainPlanArtifact
 from postgres_mcp.tool import ToolManager
 
@@ -39,7 +39,8 @@ async def test_explain_query_integration():
     """Test the entire ToolManager.explain_query tool end-to-end."""
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
-        access_mode=AccessMode.ADMIN_RW,
+        role=UserRole.FULL,
+        access_mode=AccessMode.UNRESTRICTED,
     )
 
     tool_manager = ToolManager(config=config)
@@ -73,7 +74,8 @@ async def test_explain_query_with_analyze_integration():
     """Test the ToolManager.explain_query tool with analyze=True."""
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
-        access_mode=AccessMode.ADMIN_RW,
+        role=UserRole.FULL,
+        access_mode=AccessMode.UNRESTRICTED,
     )
 
     tool_manager = ToolManager(config=config)
@@ -120,7 +122,8 @@ async def test_explain_query_with_hypothetical_indexes_integration():
     """Test the ToolManager.explain_query tool with hypothetical indexes."""
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
-        access_mode=AccessMode.ADMIN_RW,
+        role=UserRole.FULL,
+        access_mode=AccessMode.UNRESTRICTED,
     )
 
     tool_manager = ToolManager(config=config)
@@ -165,7 +168,8 @@ async def test_explain_query_missing_hypopg_integration():
     """Test the ToolManager.explain_query tool when hypopg extension is missing."""
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
-        access_mode=AccessMode.ADMIN_RW,
+        role=UserRole.FULL,
+        access_mode=AccessMode.UNRESTRICTED,
     )
 
     tool_manager = ToolManager(config=config)
@@ -202,7 +206,8 @@ async def test_explain_query_error_handling_integration():
 
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
-        access_mode=AccessMode.ADMIN_RW,
+        role=UserRole.FULL,
+        access_mode=AccessMode.UNRESTRICTED,
     )
 
     tool_manager = ToolManager(config=config)

@@ -1,52 +1,52 @@
-# Архитектура сервера с несколькими endpoint'ами
+# Multi-Endpoint Server Architecture
 
-## Обзор
+## Overview
 
-Архитектура позволяет создать один HTTP сервер с несколькими независимыми MCP endpoint'ами, каждый из которых подключен к своей базе данных с уникальными правами доступа.
+The architecture allows creating a single HTTP server with multiple independent MCP endpoints, each connected to its own database with unique access rights.
 
-## Компоненты
+## Components
 
-### 1. Главный сервер (Main Server)
+### 1. Main Server
 
-**Назначение:**
-- Точка входа для всех запросов
-- Управление жизненным циклом всех подчиненных серверов
-- Предоставление общих endpoints (например, health check)
+**Purpose:**
+- Entry point for all requests
+- Lifecycle management for all sub-servers
+- Providing common endpoints (e.g., health check)
 
-**Характеристики:**
-- FastMCP сервер с кастомными tools для управления серверами
-- Имеет собственные custom routes (например, `/health`)
-- Использует Starlette для HTTP роутинга
-
-**Endpoint:**
-- `/mcp` - главный сервер (MCP endpoint)
-- `/health` - health check endpoint
-
-**Инструменты главного сервера:**
-- `get_server_info` - получить информацию о главном сервере и всех подчиненных
-- `get_sub_server_config` - получить конфигурацию подчиненного сервера
-- `list_all_servers` - получить список всех серверов с их конфигурацией
-- `calculate_stats` - вычислить статистику для списка чисел
-
-### 2. Подчиненные серверы (Sub Servers)
-
-**Назначение:**
-- Независимые MCP серверы, каждый со своим набором tools
-- Каждый сервер подключен к своей базе данных
-- Каждый сервер имеет свой набор инструментов в зависимости от прав доступа
-
-**Характеристики:**
-- FastMCP сервер с tools из ToolManager
-- Уникальная конфигурация базы данных для каждого сервера
-- Уникальный набор инструментов в зависимости от `access_mode`
+**Characteristics:**
+- FastMCP server with custom tools for server management
+- Has its own custom routes (e.g., `/health`)
+- Uses Starlette for HTTP routing
 
 **Endpoints:**
-- `/app1/mcp` - сервер для app1
-- `/app2/mcp` - сервер для app2
-- `/app3/mcp` - сервер для app3
-- `/app4/mcp` - сервер для app4
+- `/mcp` - main server (MCP endpoint)
+- `/health` - health check endpoint
 
-## Архитектурная диаграмма
+**Main server tools:**
+- `get_server_info` - get information about the main server and all sub-servers
+- `get_sub_server_config` - get sub-server configuration
+- `list_all_servers` - get list of all servers with their configuration
+- `calculate_stats` - calculate statistics for a list of numbers
+
+### 2. Sub Servers
+
+**Purpose:**
+- Independent MCP servers, each with its own set of tools
+- Each server is connected to its own database
+- Each server has its own set of tools depending on access rights
+
+**Characteristics:**
+- FastMCP server with tools from ToolManager
+- Unique database configuration for each server
+- Unique set of tools depending on `access_mode`
+
+**Endpoints:**
+- `/app1/mcp` - server for app1
+- `/app2/mcp` - server for app2
+- `/app3/mcp` - server for app3
+- `/app4/mcp` - server for app4
+
+## Architecture Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -76,161 +76,172 @@
                     └──────────┘      └──────────┘
 ```
 
-## Структура данных
+## Data Structure
 
-### Конфигурация подчиненных серверов
+### Sub-Server Configuration
 
 ```python
 SUB_SERVERS_CONFIG = {
     "app1": DatabaseConfig(
         database_uri=SecretStr("postgresql://...@localhost:5432/db1"),
-        access_mode="user_ro",  # Только базовые инструменты (4 шт)
-        endpoint=True,  # Монтируется как отдельный endpoint /app1/mcp
+        access_mode="user_ro",  # Only basic tools (4 tools)
+        endpoint=True,  # Mounted as separate endpoint /app1/mcp
+        transport=None,  # Uses global transport (default: "http")
     ),
     "app2": DatabaseConfig(
         database_uri=SecretStr("postgresql://...@localhost:5432/db2"),
-        access_mode="user_rw",  # Базовые инструменты + запись (4 шт)
-        endpoint=True,  # Монтируется как отдельный endpoint /app2/mcp
+        access_mode="user_rw",  # Basic tools + write access (4 tools)
+        endpoint=True,  # Mounted as separate endpoint /app2/mcp
+        transport="http",  # Explicitly specified transport
     ),
     "app3": DatabaseConfig(
         database_uri=SecretStr("postgresql://...@localhost:5432/db3"),
-        access_mode="admin_ro",  # Все инструменты (9 шт)
-        endpoint=True,  # Монтируется как отдельный endpoint /app3/mcp
+        access_mode="admin_ro",  # All tools (9 tools)
+        endpoint=True,  # Mounted as separate endpoint /app3/mcp
+        transport="streamable-http",  # Uses streamable-http
     ),
     "app4": DatabaseConfig(
         database_uri=SecretStr("postgresql://...@localhost:5432/db4"),
-        access_mode="admin_rw",  # Все инструменты + неограниченный execute_sql (9 шт)
-        endpoint=True,  # Монтируется как отдельный endpoint /app4/mcp
+        access_mode="admin_rw",  # All tools + unrestricted execute_sql (9 tools)
+        endpoint=True,  # Mounted as separate endpoint /app4/mcp
+        # transport not specified - uses global transport
     ),
 }
 ```
 
-**Параметр `endpoint`:**
-- `True`: Сервер монтируется как отдельный HTTP endpoint по пути `/{server_name}/mcp`
-- `False` (по умолчанию): Сервер монтируется в основной endpoint через FastMCP mount() (Server Composition)
+**`endpoint` parameter:**
+- `True`: Server is mounted as a separate HTTP endpoint at path `/{server_name}/mcp`
+- `False` (default): Server is mounted in the main endpoint via FastMCP mount() (Server Composition)
 
-**Префиксы инструментов:**
-Префикс к именам инструментов добавляется автоматически на основе имени сервера. Это предотвращает конфликты имен, когда несколько MCP серверов подключены к одному агенту.
+**`transport` parameter:**
+- Only used when `endpoint=True` and global transport = `'http'`
+- If `transport` is not specified (None) and `endpoint=True`: uses global transport (default: `'http'`)
+- If `transport` is explicitly specified and `endpoint=True`: uses the specified value (`'http'` or `'streamable-http'`)
+- If `endpoint=False`: `transport` parameter is ignored
+- Valid values: `'http'`, `'streamable-http'`, or `None` (default)
 
-## Режимы доступа и наборы инструментов
+**Tool prefixes:**
+A prefix is automatically added to tool names based on the server name. This prevents name conflicts when multiple MCP servers are connected to a single agent.
 
-### Префиксы к именам инструментов
+## Access Modes and Tool Sets
 
-К именам инструментов автоматически добавляется префикс на основе имени сервера из конфигурации. Это предотвращает конфликты имен, когда несколько MCP серверов подключены к одному агенту.
+### Tool Name Prefixes
 
-**Пример:**
-- Сервер `app1` с инструментом `list_objects` → имя инструмента: `app1_list_objects`
-- Сервер `app2` с инструментом `list_objects` → имя инструмента: `app2_list_objects`
+A prefix is automatically added to tool names based on the server name from the configuration. This prevents name conflicts when multiple MCP servers are connected to a single agent.
 
-### USER_RO / USER_RW (4 инструмента)
+**Example:**
+- Server `app1` with tool `list_objects` → tool name: `app1_list_objects`
+- Server `app2` with tool `list_objects` → tool name: `app2_list_objects`
 
-**Инструменты с префиксом:**
-- `{prefix}_list_objects` - список объектов в схеме public
-- `{prefix}_get_object_details` - детали объекта
-- `{prefix}_explain_query` - план выполнения запроса
-- `{prefix}_execute_sql` - выполнение SQL (read-only для USER_RO, read-write для USER_RW)
+### user role (4 tools)
 
-**Отключенные инструменты:**
-- `list_schemas` - недоступен (только public схема)
-- `analyze_workload_indexes` - недоступен
-- `analyze_query_indexes` - недоступен
-- `analyze_db_health` - недоступен
-- `get_top_queries` - недоступен
+**Tools with prefix:**
+- `{prefix}_list_objects` - list objects in public schema
+- `{prefix}_get_object_details` - object details
+- `{prefix}_explain_query` - query execution plan
+- `{prefix}_execute_sql` - SQL execution (read-only for restricted, read-write for unrestricted)
 
-### ADMIN_RO / ADMIN_RW (9 инструментов)
+**Disabled tools:**
+- `list_schemas` - unavailable (only public schema)
+- `analyze_workload_indexes` - unavailable
+- `analyze_query_indexes` - unavailable
+- `analyze_db_health` - unavailable
+- `get_top_queries` - unavailable
 
-**Инструменты с префиксом:**
-- Все базовые инструменты (4 шт) с префиксом
-- `{prefix}_list_schemas` - список всех схем
-- `{prefix}_analyze_workload_indexes` - анализ индексов по workload
-- `{prefix}_analyze_query_indexes` - анализ индексов по запросам
-- `{prefix}_analyze_db_health` - анализ здоровья БД
-- `{prefix}_get_top_queries` - топ медленных запросов
+### full role (9 tools)
 
-**Разница ADMIN_RO vs ADMIN_RW:**
-- ADMIN_RO: `{prefix}_execute_sql` ограничен (только SELECT)
-- ADMIN_RW: `{prefix}_execute_sql` неограничен (DDL, DML, DCL разрешены)
+**Tools with prefix:**
+- All basic tools (4 tools) with prefix
+- `{prefix}_list_schemas` - list all schemas
+- `{prefix}_analyze_workload_indexes` - index analysis by workload
+- `{prefix}_analyze_query_indexes` - index analysis by queries
+- `{prefix}_analyze_db_health` - database health analysis
+- `{prefix}_get_top_queries` - top slow queries
 
-## Жизненный цикл (Lifespan)
+**Difference between restricted vs unrestricted:**
+- restricted: `{prefix}_execute_sql` is limited (SELECT only)
+- unrestricted: `{prefix}_execute_sql` is unrestricted (DDL, DML, DCL allowed for full role)
 
-### Инициализация (Startup)
+## Lifecycle (Lifespan)
 
-1. **Создание ToolManager для каждого подчиненного сервера**
-   - Каждый ToolManager создается с уникальной конфигурацией БД
-   - Каждый ToolManager имеет свой пул подключений
+### Initialization (Startup)
 
-2. **Регистрация tools на FastMCP серверах**
-   - Tools регистрируются через `tool_manager.register_tools(sub_mcp, prefix=app_name)`
-   - Каждый tool автоматически получает префикс для идентификации БД
-   - Для серверов с `endpoint=True` создаются отдельные FastMCP серверы
-   - Для серверов с `endpoint=False` tools регистрируются в основном сервере
+1. **Create ToolManager for each sub-server**
+   - Each ToolManager is created with a unique database configuration
+   - Each ToolManager has its own connection pool
 
-3. **Создание HTTP приложений**
-   - Каждый FastMCP сервер преобразуется в Starlette приложение через `http_app(path="/mcp")`
-   - Главный сервер также преобразуется в Starlette приложение
+2. **Register tools on FastMCP servers**
+   - Tools are registered via `tool_manager.register_tools(sub_mcp, prefix=app_name)`
+   - Each tool automatically receives a prefix to identify the database
+   - For servers with `endpoint=True`, separate FastMCP servers are created
+   - For servers with `endpoint=False`, tools are registered on the main server
 
-4. **Монтирование через Starlette Mount**
-   - Серверы с `endpoint=True` монтируются как отдельные endpoints: `Mount(f"/{app_name}", app=sub_app)`
-   - Серверы с `endpoint=False` монтируются в основной endpoint через FastMCP mount() (Server Composition)
-   - Главный сервер монтируется на корневой путь: `Mount("/", app=main_app)`
+3. **Create HTTP applications**
+   - Each FastMCP server is converted to a Starlette application via `http_app(path="/mcp")`
+   - The main server is also converted to a Starlette application
 
-5. **Инициализация подключений к БД**
-   - Для каждого ToolManager устанавливается подключение к БД
-   - Проверяется, что подключение установлено к правильной БД
+4. **Mounting via Starlette Mount**
+   - Servers with `endpoint=True` are mounted as separate endpoints: `Mount(f"/{app_name}", app=sub_app)`
+   - Servers with `endpoint=False` are mounted in the main endpoint via FastMCP mount() (Server Composition)
+   - The main server is mounted at the root path: `Mount("/", app=main_app)`
 
-### Завершение (Shutdown)
+5. **Initialize database connections**
+   - For each ToolManager, a database connection is established
+   - Verify that the connection is established to the correct database
 
-1. **Закрытие подключений к БД**
-   - Каждый ToolManager закрывает свой пул подключений
-   - Используется AsyncExitStack для корректного закрытия всех ресурсов
+### Shutdown
 
-## Ключевые принципы
+1. **Close database connections**
+   - Each ToolManager closes its connection pool
+   - AsyncExitStack is used for proper cleanup of all resources
 
-### 1. Изоляция серверов
+## Key Principles
 
-Каждый подчиненный сервер полностью изолирован:
-- Свой экземпляр ToolManager
-- Свой пул подключений к БД
-- Свой набор tools
-- Свой HTTP endpoint
+### 1. Server Isolation
 
-### 2. Использование Starlette Mount и FastMCP mount()
+Each sub-server is completely isolated:
+- Its own ToolManager instance
+- Its own database connection pool
+- Its own set of tools
+- Its own HTTP endpoint
 
-**Важно:** 
-- FastMCP `mount()` - для Server Composition (серверы с `endpoint=False`, префиксы tools/resources/prompts в одном endpoint)
-- Starlette `Mount` - для разных HTTP endpoints (серверы с `endpoint=True`, разные пути)
+### 2. Using Starlette Mount and FastMCP mount()
 
-### 3. Управление жизненным циклом
+**Important:**
+- FastMCP `mount()` - for Server Composition (servers with `endpoint=False`, tool/resource/prompt prefixes in one endpoint)
+- Starlette `Mount` - for different HTTP endpoints (servers with `endpoint=True`, different paths)
 
-Все компоненты управляются через единый `lifespan` контекстный менеджер:
-- ToolManager'ы входят в контекст через `async with tool_manager`
-- HTTP приложения входят в контекст через `async with app.lifespan(app)`
-- Используется `AsyncExitStack` для корректного закрытия всех ресурсов
+### 3. Lifecycle Management
 
-### 4. Безопасность
+All components are managed through a single `lifespan` context manager:
+- ToolManagers enter context via `async with tool_manager`
+- HTTP applications enter context via `async with app.lifespan(app)`
+- `AsyncExitStack` is used for proper cleanup of all resources
 
-- Каждый сервер имеет свои права доступа через `access_mode`
-- SafeSqlDriver ограничивает доступ к схемам и операциям в user режиме
-- Доступ к `information_schema.schemata` блокируется в user режиме
+### 4. Security
 
-## Пример использования
+- Each server has its own access rights via `access_mode`
+- SafeSqlDriver restricts access to schemas and operations in user mode
+- Access to `information_schema.schemata` is blocked in user mode
 
-### Создание подчиненного сервера
+## Usage Example
+
+### Creating a Sub-Server
 
 ```python
 def create_sub_server(app_name: str, config: DatabaseConfig) -> tuple[FastMCP, ToolManager]:
-    """Создать подчиненный сервер с tools из ToolManager."""
+    """Create a sub-server with tools from ToolManager."""
     sub_mcp = FastMCP(name=f"SubServer-{app_name}")
     tool_manager = ToolManager(config)
     tool_manager.register_tools(sub_mcp, prefix=app_name)
     return sub_mcp, tool_manager
 ```
 
-### Создание главного сервера
+### Creating the Main Server
 
 ```python
 def create_main_server() -> Starlette:
-    """Создать главный сервер с кастомными tools и монтированными подчиненными серверами."""
+    """Create the main server with custom tools and mounted sub-servers."""
     main_mcp = FastMCP(name="MainServer")
     
     # Health check endpoint
@@ -238,10 +249,10 @@ def create_main_server() -> Starlette:
     async def health_check(_request: Request) -> JSONResponse:
         return JSONResponse({"status": "healthy", "service": "main-server"})
     
-    # Кастомные tools для главного сервера
+    # Custom tools for the main server
     @main_mcp.tool
     def get_server_info() -> dict[str, Any]:
-        """Получить информацию о главном сервере и всех подчиненных серверах."""
+        """Get information about the main server and all sub-servers."""
         return {
             "server": "MainServer",
             "status": "running",
@@ -255,20 +266,20 @@ def create_main_server() -> Starlette:
     
     @main_mcp.tool
     def get_sub_server_config(app_name: str) -> dict[str, Any]:
-        """Получить конфигурацию подчиненного сервера."""
-        # ... реализация ...
+        """Get sub-server configuration."""
+        # ... implementation ...
     
     @main_mcp.tool
     def list_all_servers() -> list[dict[str, Any]]:
-        """Получить список всех серверов (главный + подчиненные) с их конфигурацией."""
-        # ... реализация ...
+        """Get list of all servers (main + sub-servers) with their configuration."""
+        # ... implementation ...
     
     @main_mcp.tool
     def calculate_stats(numbers: list[int]) -> dict[str, Any]:
-        """Вычислить статистику для списка чисел."""
-        # ... реализация ...
+        """Calculate statistics for a list of numbers."""
+        # ... implementation ...
     
-    # Создание подчиненных серверов
+    # Create sub-servers
     tool_managers: dict[str, ToolManager] = {}
     sub_apps: list[tuple[str, Starlette]] = []
     
@@ -280,19 +291,19 @@ def create_main_server() -> Starlette:
     
     main_app = main_mcp.http_app(path="/mcp")
     
-    # Объединенный lifespan
+    # Combined lifespan
     @asynccontextmanager
     async def combined_lifespan(_app: Starlette) -> AsyncIterator[dict[str, Any]]:
         async with AsyncExitStack() as stack:
-            # Вход в контекст ToolManager'ов
+            # Enter ToolManager context
             for tool_manager in tool_managers.values():
                 await stack.enter_async_context(tool_manager)
             
-            # Инициализация подключений к БД
+            # Initialize database connections
             for app_name, tool_manager in tool_managers.items():
                 await tool_manager.db_connection.pool_connect()
             
-            # Вход в контекст HTTP приложений
+            # Enter HTTP application context
             for app_name, sub_app in sub_apps:
                 if hasattr(sub_app, "lifespan") and sub_app.lifespan:
                     await stack.enter_async_context(sub_app.lifespan(_app))
@@ -302,7 +313,7 @@ def create_main_server() -> Starlette:
             
             yield {}
     
-    # Монтирование через Starlette Mount
+    # Mounting via Starlette Mount
     routes = [
         Mount(f"/{app_name}", app=sub_app)
         for app_name, sub_app in sub_apps
@@ -312,20 +323,20 @@ def create_main_server() -> Starlette:
     return Starlette(routes=routes, lifespan=combined_lifespan)
 ```
 
-### Запуск сервера
+### Running the Server
 
 ```python
 async def run_server() -> None:
-    """Запустить сервер."""
+    """Run the server."""
     app = create_main_server()
     config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
     server = uvicorn.Server(config)
     await server.serve()
 ```
 
-## Конфигурация MCP клиента
+## MCP Client Configuration
 
-Для подключения к каждому серверу через MCP клиент (например, Cursor):
+To connect to each server via an MCP client (e.g., Cursor):
 
 ```json
 {
@@ -354,29 +365,28 @@ async def run_server() -> None:
 }
 ```
 
-**Примечание:** Главный сервер (`main`) предоставляет инструменты для управления и получения информации о всех серверах. Подчиненные серверы (`app1`, `app2`, `app3`, `app4`) предоставляют инструменты для работы с базами данных.
+**Note:** The main server (`main`) provides tools for managing and getting information about all servers. Sub-servers (`app1`, `app2`, `app3`, `app4`) provide tools for working with databases.
 
-## Преимущества архитектуры
+## Architecture Benefits
 
-1. **Масштабируемость**: Легко добавить новые подчиненные серверы
-2. **Изоляция**: Каждый сервер независим и изолирован
-3. **Гибкость**: Разные права доступа для разных серверов
-4. **Единая точка входа**: Один HTTP сервер для всех endpoint'ов
-5. **Управление ресурсами**: Централизованное управление жизненным циклом
+1. **Scalability**: Easy to add new sub-servers
+2. **Isolation**: Each server is independent and isolated
+3. **Flexibility**: Different access rights for different servers
+4. **Single entry point**: One HTTP server for all endpoints
+5. **Resource management**: Centralized lifecycle management
 
-## Ограничения
+## Limitations
 
-1. **Один порт**: Все endpoint'ы работают на одном порту
-2. **Один процесс**: Все серверы работают в одном процессе
-3. **Общая конфигурация**: Некоторые настройки (например, timeout) общие для всех серверов
+1. **Single port**: All endpoints run on one port
+2. **Single process**: All servers run in one process
+3. **Shared configuration**: Some settings (e.g., timeout) are shared across all servers
 
-## Расширения
+## Extensions
 
-### Возможные улучшения:
+### Possible Improvements:
 
-1. **Динамическая конфигурация**: Загрузка конфигурации из файла или БД
-2. **Мониторинг**: Добавление метрик и логирования для каждого сервера
-3. **Аутентификация**: Добавление аутентификации для каждого endpoint'а
-4. **Rate limiting**: Ограничение запросов для каждого сервера
-5. **Health checks**: Индивидуальные health checks для каждого сервера
-
+1. **Dynamic configuration**: Load configuration from file or database
+2. **Monitoring**: Add metrics and logging for each server
+3. **Authentication**: Add authentication for each endpoint
+4. **Rate limiting**: Request limiting for each server
+5. **Health checks**: Individual health checks for each server

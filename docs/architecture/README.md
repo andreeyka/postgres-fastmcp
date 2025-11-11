@@ -1,6 +1,6 @@
-# Архитектурная документация
+# Architecture Documentation
 
-## Документы
+## Documents
 
-- [Архитектура сервера с несколькими endpoint'ами](./multi-endpoint-server.md) - описание архитектуры для создания одного HTTP сервера с несколькими независимыми MCP endpoint'ами
+- [Multi-Endpoint Server Architecture](./multi-endpoint-server.md) - architecture description for creating a single HTTP server with multiple independent MCP endpoints
 

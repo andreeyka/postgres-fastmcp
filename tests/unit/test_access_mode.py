@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from postgres_mcp.enums import AccessMode
+from postgres_mcp.enums import AccessMode, UserRole
 from postgres_mcp.sql.safe_sql import SafeSqlDriver
 from postgres_mcp.sql.sql_driver import DbConnPool, SqlDriver
 
@@ -19,15 +19,17 @@ def mock_db_connection():
 
 
 @pytest.mark.parametrize(
-    "access_mode,expected_driver_type",
+    "role,access_mode,expected_driver_type",
     [
-        (AccessMode.ADMIN_RW, SqlDriver),
-        (AccessMode.ADMIN_RO, SafeSqlDriver),
+        (UserRole.FULL, AccessMode.UNRESTRICTED, SqlDriver),
+        (UserRole.FULL, AccessMode.RESTRICTED, SafeSqlDriver),
+        (UserRole.USER, AccessMode.UNRESTRICTED, SafeSqlDriver),
+        (UserRole.USER, AccessMode.RESTRICTED, SafeSqlDriver),
     ],
 )
 @pytest.mark.asyncio
-async def test_tool_manager_returns_correct_driver(access_mode, expected_driver_type, mock_db_connection):
-    """Test that ToolManager returns the correct driver type based on access mode."""
+async def test_tool_manager_returns_correct_driver(role, access_mode, expected_driver_type, mock_db_connection):
+    """Test that ToolManager returns the correct driver type based on role and access_mode."""
     from pydantic import SecretStr
 
     from postgres_mcp.config import DatabaseConfig
@@ -35,6 +37,7 @@ async def test_tool_manager_returns_correct_driver(access_mode, expected_driver_
 
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
+        role=role,
         access_mode=access_mode,
     )
 
@@ -43,8 +46,8 @@ async def test_tool_manager_returns_correct_driver(access_mode, expected_driver_
     driver = tool_manager.sql_driver
     assert isinstance(driver, expected_driver_type)
 
-    # When in ADMIN_RO mode, verify timeout is set
-    if access_mode == AccessMode.ADMIN_RO:
+    # When not in FULL+UNRESTRICTED mode, verify timeout is set
+    if not (role == UserRole.FULL and access_mode == AccessMode.UNRESTRICTED):
         assert isinstance(driver, SafeSqlDriver)
         assert driver.timeout == 30
 
@@ -59,7 +62,8 @@ async def test_tool_manager_sets_timeout_in_restricted_mode(mock_db_connection):
 
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
-        access_mode=AccessMode.ADMIN_RO,
+        role=UserRole.FULL,
+        access_mode=AccessMode.RESTRICTED,
     )
 
     tool_manager = ToolManager(config=config)
@@ -72,7 +76,7 @@ async def test_tool_manager_sets_timeout_in_restricted_mode(mock_db_connection):
 
 @pytest.mark.asyncio
 async def test_tool_manager_in_unrestricted_mode_no_timeout(mock_db_connection):
-    """Test that ToolManager in unrestricted mode is a regular SqlDriver."""
+    """Test that ToolManager in full+unrestricted mode is a regular SqlDriver."""
     from pydantic import SecretStr
 
     from postgres_mcp.config import DatabaseConfig
@@ -80,7 +84,8 @@ async def test_tool_manager_in_unrestricted_mode_no_timeout(mock_db_connection):
 
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
-        access_mode=AccessMode.ADMIN_RW,
+        role=UserRole.FULL,
+        access_mode=AccessMode.UNRESTRICTED,
     )
 
     tool_manager = ToolManager(config=config)
@@ -110,12 +115,14 @@ async def test_command_line_parsing():
             "--transport",
             "stdio",
         ]
-        asyncio.run = AsyncMock()
+        # Mock asyncio.run as a regular MagicMock (not AsyncMock) since it's a sync function
+        asyncio.run = MagicMock()
 
-        # Mock the server run functions to avoid actual execution
+        # Mock the server run functions as regular MagicMock (not AsyncMock)
+        # since asyncio.run is mocked and won't actually await them
         with (
-            patch("postgres_mcp.main.run_stdio", AsyncMock()),
-            patch("postgres_mcp.main.run_http", AsyncMock()),
+            patch("postgres_mcp.main.run_stdio", MagicMock()),
+            patch("postgres_mcp.main.run_http", MagicMock()),
         ):
             # Run main (partially mocked to avoid actual connection)
             # Click raises SystemExit(0) on success, which we need to catch

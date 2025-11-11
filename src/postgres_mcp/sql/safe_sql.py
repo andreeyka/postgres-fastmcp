@@ -893,11 +893,11 @@ class SafeSqlDriver(SqlDriver):
 
         Args:
             sql_driver: The underlying SQL driver to wrap
-            config: Конфигурация SafeSqlDriver. Если не указана, используются значения по умолчанию.
+            config: SafeSqlDriver configuration. If not specified, default values are used.
         """
         self.sql_driver = sql_driver
 
-        # Используем переданный config или создаем дефолтный
+        # Use the provided config or create a default one
         if config is None:
             config = SafeSqlConfig()
 

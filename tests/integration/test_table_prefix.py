@@ -7,7 +7,7 @@ import pytest
 from pydantic import SecretStr
 
 from postgres_mcp.config import DatabaseConfig
-from postgres_mcp.enums import AccessMode
+from postgres_mcp.enums import AccessMode, UserRole
 from postgres_mcp.sql import SafeSqlDriver, SqlDriver
 from postgres_mcp.tool import ToolManager
 
@@ -68,7 +68,8 @@ async def test_table_prefix_allows_prefixed_tables(test_postgres_connection_stri
     # First, setup tables using admin connection
     admin_config = DatabaseConfig(
         database_uri=SecretStr(connection_string),
-        access_mode=AccessMode.ADMIN_RW,
+        role=UserRole.FULL,
+        access_mode=AccessMode.UNRESTRICTED,
     )
     admin_tool_manager = ToolManager(config=admin_config)
     await admin_tool_manager.__aenter__()
@@ -80,7 +81,8 @@ async def test_table_prefix_allows_prefixed_tables(test_postgres_connection_stri
     # Now test with user mode and table_prefix
     config = DatabaseConfig(
         database_uri=SecretStr(connection_string),
-        access_mode=AccessMode.USER_RO,
+        role=UserRole.USER,
+        access_mode=AccessMode.RESTRICTED,
         table_prefix="app_",
     )
 
@@ -118,7 +120,8 @@ async def test_table_prefix_blocks_non_prefixed_tables(test_postgres_connection_
     # First, setup tables using admin connection
     admin_config = DatabaseConfig(
         database_uri=SecretStr(connection_string),
-        access_mode=AccessMode.ADMIN_RW,
+        role=UserRole.FULL,
+        access_mode=AccessMode.UNRESTRICTED,
     )
     admin_tool_manager = ToolManager(config=admin_config)
     await admin_tool_manager.__aenter__()
@@ -130,7 +133,8 @@ async def test_table_prefix_blocks_non_prefixed_tables(test_postgres_connection_
     # Now test with user mode and table_prefix
     config = DatabaseConfig(
         database_uri=SecretStr(connection_string),
-        access_mode=AccessMode.USER_RO,
+        role=UserRole.USER,
+        access_mode=AccessMode.RESTRICTED,
         table_prefix="app_",
     )
 
@@ -170,7 +174,8 @@ async def test_table_prefix_is_case_insensitive(test_postgres_connection_string:
     # Setup tables
     admin_config = DatabaseConfig(
         database_uri=SecretStr(connection_string),
-        access_mode=AccessMode.ADMIN_RW,
+        role=UserRole.FULL,
+        access_mode=AccessMode.UNRESTRICTED,
     )
     admin_tool_manager = ToolManager(config=admin_config)
     await admin_tool_manager.__aenter__()
@@ -184,7 +189,8 @@ async def test_table_prefix_is_case_insensitive(test_postgres_connection_string:
     # Test with lowercase prefix - should match uppercase table
     config = DatabaseConfig(
         database_uri=SecretStr(connection_string),
-        access_mode=AccessMode.USER_RO,
+        role=UserRole.USER,
+        access_mode=AccessMode.RESTRICTED,
         table_prefix="app_",
     )
 
@@ -210,7 +216,8 @@ async def test_table_prefix_blocks_system_schemas(test_postgres_connection_strin
     # Create config with table_prefix
     config = DatabaseConfig(
         database_uri=SecretStr(connection_string),
-        access_mode=AccessMode.USER_RO,
+        role=UserRole.USER,
+        access_mode=AccessMode.RESTRICTED,
         table_prefix="app_",
     )
 
@@ -244,7 +251,8 @@ async def test_list_objects_filters_by_prefix(test_postgres_connection_string: t
     # First, setup tables using admin connection
     admin_config = DatabaseConfig(
         database_uri=SecretStr(connection_string),
-        access_mode=AccessMode.ADMIN_RW,
+        role=UserRole.FULL,
+        access_mode=AccessMode.UNRESTRICTED,
     )
     admin_tool_manager = ToolManager(config=admin_config)
     await admin_tool_manager.__aenter__()
@@ -256,7 +264,8 @@ async def test_list_objects_filters_by_prefix(test_postgres_connection_string: t
     # Now test with user mode and table_prefix
     config = DatabaseConfig(
         database_uri=SecretStr(connection_string),
-        access_mode=AccessMode.USER_RO,
+        role=UserRole.USER,
+        access_mode=AccessMode.RESTRICTED,
         table_prefix="app_",
     )
 
@@ -295,7 +304,8 @@ async def test_table_prefix_ignored_in_admin_mode(test_postgres_connection_strin
     # First, setup tables using admin connection
     admin_config = DatabaseConfig(
         database_uri=SecretStr(connection_string),
-        access_mode=AccessMode.ADMIN_RW,
+        role=UserRole.FULL,
+        access_mode=AccessMode.UNRESTRICTED,
     )
     admin_tool_manager = ToolManager(config=admin_config)
     await admin_tool_manager.__aenter__()
@@ -307,7 +317,8 @@ async def test_table_prefix_ignored_in_admin_mode(test_postgres_connection_strin
     # Create config with table_prefix but admin mode
     config = DatabaseConfig(
         database_uri=SecretStr(connection_string),
-        access_mode=AccessMode.ADMIN_RO,
+        role=UserRole.FULL,
+        access_mode=AccessMode.RESTRICTED,
         table_prefix="app_",  # Should be ignored
     )
 
@@ -342,7 +353,8 @@ async def test_list_schemas_returns_only_public_in_user_mode(test_postgres_conne
     # Create config with table_prefix
     config = DatabaseConfig(
         database_uri=SecretStr(connection_string),
-        access_mode=AccessMode.USER_RO,
+        role=UserRole.USER,
+        access_mode=AccessMode.RESTRICTED,
         table_prefix="app_",
     )
 
@@ -373,7 +385,8 @@ async def test_table_prefix_with_different_prefixes(test_postgres_connection_str
     # Setup tables with different prefixes
     admin_config = DatabaseConfig(
         database_uri=SecretStr(connection_string),
-        access_mode=AccessMode.ADMIN_RW,
+        role=UserRole.FULL,
+        access_mode=AccessMode.UNRESTRICTED,
     )
     admin_tool_manager = ToolManager(config=admin_config)
     await admin_tool_manager.__aenter__()
@@ -387,7 +400,8 @@ async def test_table_prefix_with_different_prefixes(test_postgres_connection_str
     # Test with "user_" prefix
     config = DatabaseConfig(
         database_uri=SecretStr(connection_string),
-        access_mode=AccessMode.USER_RO,
+        role=UserRole.USER,
+        access_mode=AccessMode.RESTRICTED,
         table_prefix="user_",
     )
 

@@ -1,101 +1,120 @@
+.PHONY: help lint format clean commit push release-patch release-minor release-major test docker-up docker-down
 
-.PHONY: help lint format clean commit push release-patch release-minor release-major
-
-help: ## Показать справку по командам
-	@echo "Доступные команды:"
+help: ## Show help for available commands
+	@echo "Available commands:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-lint: ## Проверить код линтерами (ruff + mypy)
+lint: ## Check code with linters (ruff + mypy)
 	uv run ruff check .
 	uv run mypy src/
 
-format: ## Отформатировать код (ruff format + автофиксы)
+format: ## Format code (ruff format + auto-fixes)
 	uv run ruff format .
 	uv run ruff check --fix .
 
-clean: ## Очистить артефакты сборки и кэши
+clean: ## Clean build artifacts and caches
 	rm -rf dist/ build/ *.egg-info/ .pytest_cache/ .ruff_cache/ .mypy_cache/ .coverage htmlcov/
 
-# Управление версиями
+test: ## Run all tests
+	uv run python -m pytest
 
-release-patch: ## Релиз PATCH версии (clean → sync → bump → commit → push → merge)
-	@echo "Запускаю релиз PATCH версии..."
-	@echo "Очищаю артефакты сборки..."
+test-unit: ## Run unit tests only
+	uv run python -m pytest tests/unit/
+
+test-integration: ## Run integration tests only
+	uv run python -m pytest tests/integration/
+
+# Version management
+
+release-patch: ## Release PATCH version (clean → sync → bump → commit → push → merge)
+	@echo "Starting PATCH version release..."
+	@echo "Cleaning build artifacts..."
 	$(MAKE) clean
-	@echo "Синхронизирую зависимости..."
+	@echo "Synchronizing dependencies..."
 	uv sync
-	@echo "Увеличиваю PATCH версию..."
+	@echo "Bumping PATCH version..."
 	uv version --bump patch
 	@NEW_VERSION=$$(uv version --short); \
-	echo "Новая версия: $$NEW_VERSION"; \
-	echo "Обновляю локальный репозиторий..."; \
+	echo "New version: $$NEW_VERSION"; \
+	echo "Updating local repository..."; \
 	git pull; \
 	git add .; \
 	git commit -m "Release v$$NEW_VERSION"; \
 	git push; \
-	echo "Релиз v$$NEW_VERSION создан и отправлен!"; \
-	echo "Теперь создайте Merge Request в main ветку"
+	echo "Release v$$NEW_VERSION created and pushed!"; \
+	echo "Now create a Merge Request to the main branch"
 
-release-minor: ## Релиз MINOR версии (clean → sync → bump → commit → push → merge)
-	@echo "Запускаю релиз MINOR версии..."
-	@echo "Очищаю артефакты сборки..."
+release-minor: ## Release MINOR version (clean → sync → bump → commit → push → merge)
+	@echo "Starting MINOR version release..."
+	@echo "Cleaning build artifacts..."
 	$(MAKE) clean
-	@echo "Синхронизирую зависимости..."
+	@echo "Synchronizing dependencies..."
 	uv sync
-	@echo "Увеличиваю MINOR версию..."
+	@echo "Bumping MINOR version..."
 	uv version --bump minor
 	@NEW_VERSION=$$(uv version --short); \
-	echo "Новая версия: $$NEW_VERSION"; \
-	echo "Обновляю локальный репозиторий..."; \
+	echo "New version: $$NEW_VERSION"; \
+	echo "Updating local repository..."; \
 	git pull; \
 	git add .; \
 	git commit -m "Release v$$NEW_VERSION"; \
 	git push; \
-	echo "Релиз v$$NEW_VERSION создан и отправлен!"; \
-	echo "Теперь создайте Merge Request в main ветку"
+	echo "Release v$$NEW_VERSION created and pushed!"; \
+	echo "Now create a Merge Request to the main branch"
 
-release-major: ## Релиз MAJOR версии (clean → sync → bump → commit → push → merge)
-	@echo "Запускаю релиз MAJOR версии..."
-	@echo "Очищаю артефакты сборки..."
+release-major: ## Release MAJOR version (clean → sync → bump → commit → push → merge)
+	@echo "Starting MAJOR version release..."
+	@echo "Cleaning build artifacts..."
 	$(MAKE) clean
-	@echo "Синхронизирую зависимости..."
+	@echo "Synchronizing dependencies..."
 	uv sync
-	@echo "Увеличиваю MAJOR версию..."
+	@echo "Bumping MAJOR version..."
 	uv version --bump major
 	@NEW_VERSION=$$(uv version --short); \
-	echo "Новая версия: $$NEW_VERSION"; \
-	echo "Обновляю локальный репозиторий..."; \
+	echo "New version: $$NEW_VERSION"; \
+	echo "Updating local repository..."; \
 	git pull; \
 	git add .; \
 	git commit -m "Release v$$NEW_VERSION"; \
 	git push; \
-	echo "Релиз v$$NEW_VERSION создан и отправлен!"; \
-	echo "Теперь создайте Merge Request в main ветку"
+	echo "Release v$$NEW_VERSION created and pushed!"; \
+	echo "Now create a Merge Request to the main branch"
 
-# Git команды
-commit: ## Сделать коммит с сообщением (интерактивно запрашивает сообщение)
-	@echo "📝 Введите сообщение для коммита:"
-	@read -p "Сообщение: " msg; \
-	echo "🔄 Обновляю локальный репозиторий..."; \
+# Git commands
+
+commit: ## Make a commit with message (interactively prompts for message)
+	@echo "📝 Enter commit message:"
+	@read -p "Message: " msg; \
+	echo "🔄 Updating local repository..."; \
 	git pull; \
 	git add .; \
 	git commit -m "$$msg"; \
-	echo "✅ Коммит создан!"
+	echo "✅ Commit created!"
 
-push: ## Сделать коммит и пуш (интерактивно запрашивает сообщение)
-	@echo "📝 Введите сообщение для коммита:"
-	@read -p "Сообщение: " msg; \
-	echo "🔄 Обновляю локальный репозиторий..."; \
+push: ## Make a commit and push (interactively prompts for message)
+	@echo "📝 Enter commit message:"
+	@read -p "Message: " msg; \
+	echo "🔄 Updating local repository..."; \
 	git pull; \
 	git add .; \
 	git commit -m "$$msg"; \
 	git push; \
-	echo "✅ Коммит создан и отправлен в удаленный репозиторий!"
+	echo "✅ Commit created and pushed to remote repository!"
 
-run-mcp: ## Запустить MCP сервер
-	uv run python mcp_server.py
+# Docker commands
 
+docker-up: ## Start Docker test environment
+	docker-compose up -d --build
 
-# Специальные правила для обработки аргументов
+docker-down: ## Stop Docker test environment
+	docker-compose down
+
+docker-logs: ## View Docker logs
+	docker-compose logs -f
+
+docker-clean: ## Stop Docker environment and remove volumes
+	docker-compose down -v
+
+# Special rule for handling arguments
 %:
 	@:

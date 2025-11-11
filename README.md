@@ -13,8 +13,10 @@
   <a href="#overview">Overview</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#configuration">Configuration</a> •
+  <a href="#multi-server-architecture">Multi-Server Architecture</a> •
   <a href="#technical-details">Technical Details</a> •
   <a href="#mcp-api">MCP API</a> •
+  <a href="#configuration-examples">Configuration Examples</a> •
   <a href="#development">Development</a>
 </div>
 
@@ -77,10 +79,178 @@ uv pip install -e .
 
 ### Running the Server
 
-#### Single Database Mode (CLI)
+The server can be run in several modes depending on your needs:
 
-For quick start with a single database:
+#### 1. Single Database Mode (CLI)
 
+For quick start with a single database, use CLI parameters:
+
+**HTTP mode:**
+```bash
+uv run postgres-mcp \
+  --database-uri "postgresql://user:password@localhost:5432/dbname" \
+  --transport http \
+  --port 8000 \
+  --role full \
+  --access-mode restricted
+```
+
+**STDIO mode (for MCP clients like Claude Desktop):**
+```bash
+uv run postgres-mcp \
+  --database-uri "postgresql://user:password@localhost:5432/dbname" \
+  --transport stdio \
+  --role user \
+  --access-mode restricted
+```
+
+**With custom tool prefix:**
+```bash
+uv run postgres-mcp \
+  --database-uri "postgresql://user:password@localhost:5432/dbname" \
+  --transport http \
+  --name "mydb" \
+  --role full \
+  --access-mode unrestricted
+```
+
+#### 2. Configuration File Mode
+
+Create a `config.json` file in the current directory:
+
+**Basic multi-database configuration:**
+```json
+{
+    "name": "postgres-fastmcp",
+    "transport": "http",
+    "host": "0.0.0.0",
+    "port": 8000,
+    "endpoint": "mcp",
+    "databases": {
+        "production": {
+            "database_uri": "postgresql://user:password@localhost:5432/production",
+            "role": "full",
+            "access_mode": "restricted",
+            "transport": "http"
+        },
+        "development": {
+            "database_uri": "postgresql://user:password@localhost:5432/development",
+            "role": "full",
+            "access_mode": "unrestricted",
+            "transport": "http"
+        }
+    }
+}
+```
+
+**With separate endpoints:**
+```json
+{
+    "name": "postgres-fastmcp",
+    "transport": "http",
+    "host": "0.0.0.0",
+    "port": 8000,
+    "endpoint": "mcp",
+    "databases": {
+        "app1": {
+            "database_uri": "postgresql://user:password@localhost:5432/app1",
+            "role": "user",
+            "access_mode": "restricted",
+            "endpoint": true,
+            "transport": "http"
+        },
+        "app2": {
+            "database_uri": "postgresql://user:password@localhost:5432/app2",
+            "role": "full",
+            "access_mode": "unrestricted",
+            "endpoint": true,
+            "transport": "streamable-http"
+        }
+    }
+}
+```
+
+Then run:
+```bash
+uv run postgres-mcp
+```
+
+#### 3. Environment Variables Mode
+
+You can also configure the server using environment variables:
+
+```bash
+export TRANSPORT=http
+export HOST=0.0.0.0
+export PORT=8000
+export DATABASES__PRODUCTION__DATABASE_URI=postgresql://user:pass@localhost:5432/prod
+export DATABASES__PRODUCTION__ROLE=full
+export DATABASES__PRODUCTION__ACCESS_MODE=restricted
+export DATABASES__DEVELOPMENT__DATABASE_URI=postgresql://user:pass@localhost:5432/dev
+export DATABASES__DEVELOPMENT__ROLE=full
+export DATABASES__DEVELOPMENT__ACCESS_MODE=unrestricted
+
+uv run postgres-mcp
+```
+
+#### 4. Mixed Configuration
+
+You can combine configuration sources. Priority order (highest to lowest):
+1. CLI parameters
+2. `config.json` file
+3. Environment variables
+4. Default values
+
+## Configuration
+
+### Access Control
+
+The project uses two independent parameters for flexible security control:
+
+#### Role (`role`)
+
+Determines schema access and available tools:
+
+| Role | Schemas | Tools | Description |
+|------|---------|-------|-------------|
+| `user` | Only `public` | Basic (4) | Basic role with access limited to public schema |
+| `full` | All schemas | All (9) | Full role with access to all schemas and extended privileges |
+
+#### Access Mode (`access_mode`)
+
+Determines SQL access level:
+
+| Access Mode | SQL Access | Description |
+|-------------|------------|-------------|
+| `restricted` | Read-only (SELECT only) | Restricted access mode |
+| `unrestricted` | Read-write (DML: INSERT/UPDATE/DELETE) or full access (DDL) | Unrestricted access mode |
+
+#### Combination Matrix
+
+| Role | Access Mode | Equivalent | Tools | SQL Access | Schemas |
+|------|-------------|------------|-------|------------|---------|
+| `user` | `restricted` | USER_RO | Basic (4) | Read-only | `public` |
+| `user` | `unrestricted` | USER_RW | Basic (4) | Read-write | `public` |
+| `full` | `restricted` | ADMIN_RO | All (9) | Read-only | All |
+| `full` | `unrestricted` | ADMIN_RW | All (9) | Full access (DDL) | All |
+
+**Default values:**
+- `role`: `"user"` (default)
+- `access_mode`: `"restricted"` (default)
+- Default combination: `role="user"` + `access_mode="restricted"` (maximum security)
+
+### Transports
+
+The server supports three transport types, each suitable for different use cases:
+
+#### HTTP Transport
+
+HTTP transport allows running the server as a web application. This is ideal for:
+- Integration with web-based MCP clients (like Cursor)
+- Multiple clients connecting to the same server
+- Production deployments
+
+**Single database:**
 ```bash
 uv run postgres-mcp \
   --database-uri "postgresql://user:password@localhost:5432/dbname" \
@@ -88,9 +258,121 @@ uv run postgres-mcp \
   --port 8000
 ```
 
-#### Configuration File Mode
+The server will be available at `http://localhost:8000/mcp` (or at the specified endpoint).
 
-Create a `config.json` file:
+**Multiple databases (Server Composition):**
+When multiple databases are configured with `endpoint=false` (default), all tools are available at the main endpoint with prefixes:
+
+```json
+{
+    "transport": "http",
+    "databases": {
+        "db1": {
+            "database_uri": "postgresql://...",
+            "endpoint": false
+        },
+        "db2": {
+            "database_uri": "postgresql://...",
+            "endpoint": false
+        }
+    }
+}
+```
+
+Tools will be available as: `db1_list_objects`, `db2_list_objects`, etc.
+
+#### Streamable-HTTP Transport
+
+Streamable-HTTP provides streaming data transfer for large responses. This is useful for:
+- Large query results
+- Long-running operations
+- Real-time data streaming
+
+**Important:** Streamable-HTTP can only be used for servers with `endpoint=true` (separate endpoints).
+
+```json
+{
+    "transport": "http",
+    "databases": {
+        "analytics": {
+            "database_uri": "postgresql://...",
+            "endpoint": true,
+            "transport": "streamable-http"
+        },
+        "main": {
+            "database_uri": "postgresql://...",
+            "endpoint": true,
+            "transport": "http"
+        }
+    }
+}
+```
+
+Each server can have its own transport type (`"http"` or `"streamable-http"`). The analytics server will be available at `http://localhost:8000/analytics/mcp` with streaming support.
+
+#### STDIO Transport
+
+STDIO transport is used for integration with MCP clients via standard input/output. This is ideal for:
+- Desktop MCP clients (like Claude Desktop)
+- Direct process communication
+- Development and testing
+
+**Single database:**
+```bash
+uv run postgres-mcp \
+  --database-uri "postgresql://user:password@localhost:5432/dbname" \
+  --transport stdio
+```
+
+**Multiple databases:**
+In stdio mode, all databases are automatically registered with prefixes, regardless of the `endpoint` setting:
+
+```json
+{
+    "transport": "stdio",
+    "databases": {
+        "db1": {
+            "database_uri": "postgresql://...",
+            "endpoint": true  # Ignored in stdio mode
+        },
+        "db2": {
+            "database_uri": "postgresql://...",
+            "endpoint": false  # Ignored in stdio mode
+        }
+    }
+}
+```
+
+All tools will be available with prefixes: `db1_list_objects`, `db2_list_objects`, etc.
+
+### Configuration Methods
+
+The server supports multiple configuration methods with the following priority (highest to lowest):
+
+1. **CLI parameters** - Command-line arguments (highest priority)
+2. **config.json file** - JSON configuration file in the current directory
+3. **Environment variables** - System environment variables
+4. **Default values** - Built-in defaults (lowest priority)
+
+#### CLI Parameters
+
+All configuration can be provided via command-line arguments:
+
+```bash
+uv run postgres-mcp \
+  --database-uri "postgresql://user:password@localhost:5432/dbname" \
+  --transport http \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --role full \
+  --access-mode restricted \
+  --name "mydb" \
+  --endpoint
+```
+
+#### config.json File
+
+Create a `config.json` file in the current directory:
 
 ```json
 {
@@ -102,97 +384,51 @@ Create a `config.json` file:
     "databases": {
         "production": {
             "database_uri": "postgresql://user:password@localhost:5432/production",
-            "access_mode": "admin_ro",
-            "transport": "http"
-        },
-        "development": {
-            "database_uri": "postgresql://user:password@localhost:5432/development",
-            "access_mode": "admin_rw",
+            "role": "full",
+            "access_mode": "restricted",
+            "endpoint": false,
             "transport": "http"
         }
     }
 }
 ```
 
-Then run:
+#### Environment Variables
 
-```bash
-uv run postgres-mcp
-```
-
-## Configuration
-
-### Access Modes
-
-The project supports four access modes for flexible security control:
-
-| Mode | Schemas | Access | Tools | Description |
-|------|---------|--------|-------|-------------|
-| `USER_RO` | Only `public` | Read-only | Basic | User mode with access limited to public schema |
-| `USER_RW` | Only `public` | Read/write (DML) | Basic | User mode with ability to modify data |
-| `ADMIN_RO` | All schemas | Read-only | All | Administrative mode with access to all schemas |
-| `ADMIN_RW` | All schemas | Full access (including DDL) | All | Full administrative access |
-
-### Transports
-
-#### HTTP Transport
-
-HTTP transport allows running the server as a web application:
-
-```bash
-uv run postgres-mcp --transport http --port 8000
-```
-
-The server will be available at `http://localhost:8000/mcp` (or at the specified endpoint).
-
-#### Streamable-HTTP Transport
-
-Streamable-HTTP provides streaming data transfer. To use it, set `transport: "streamable-http"` for each server:
-
-```json
-{
-    "transport": "http",
-    "databases": {
-        "db1": {
-            "database_uri": "postgresql://...",
-            "transport": "streamable-http"
-        },
-        "db2": {
-            "database_uri": "postgresql://...",
-            "transport": "http"
-        }
-    }
-}
-```
-
-Each server can have its own transport type (`"http"` or `"streamable-http"`).
-
-#### STDIO Transport
-
-STDIO transport is used for integration with MCP clients via standard input/output:
-
-```bash
-uv run postgres-mcp --transport stdio
-```
-
-### Configuration via Environment Variables
-
-You can use environment variables for configuration:
+Use nested delimiter `__` (double underscore) for nested configuration:
 
 ```bash
 export TRANSPORT=http
 export HOST=0.0.0.0
 export PORT=8000
 export DATABASES__PRODUCTION__DATABASE_URI=postgresql://user:pass@localhost:5432/prod
-export DATABASES__PRODUCTION__ACCESS_MODE=admin_ro
+export DATABASES__PRODUCTION__ROLE=full
+export DATABASES__PRODUCTION__ACCESS_MODE=restricted
+export DATABASES__DEVELOPMENT__DATABASE_URI=postgresql://user:pass@localhost:5432/dev
+export DATABASES__DEVELOPMENT__ROLE=user
+export DATABASES__DEVELOPMENT__ACCESS_MODE=unrestricted
+```
+
+#### .env File
+
+You can also use a `.env` file in the current directory with the same format as environment variables:
+
+```env
+TRANSPORT=http
+HOST=0.0.0.0
+PORT=8000
+DATABASES__PRODUCTION__DATABASE_URI=postgresql://user:pass@localhost:5432/prod
+DATABASES__PRODUCTION__ROLE=full
+DATABASES__PRODUCTION__ACCESS_MODE=restricted
 ```
 
 ### MCP Client Integration
 
-#### Cursor
+#### Cursor (HTTP Transport)
 
-In `~/.cursor/mcp.json`:
+For HTTP transport, configure Cursor in `~/.cursor/mcp.json`:
 
+**Single database:**
 ```json
 {
     "mcpServers": {
@@ -204,10 +440,41 @@ In `~/.cursor/mcp.json`:
 }
 ```
 
-#### Claude Desktop
+**Multiple databases with separate endpoints:**
+```json
+{
+    "mcpServers": {
+        "postgres-prod": {
+            "type": "sse",
+            "url": "http://localhost:8000/production/mcp"
+        },
+        "postgres-dev": {
+            "type": "sse",
+            "url": "http://localhost:8000/development/mcp"
+        }
+    }
+}
+```
 
-In `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS):
+**Multiple databases with Server Composition (single endpoint with prefixes):**
+```json
+{
+    "mcpServers": {
+        "postgres": {
+            "type": "sse",
+            "url": "http://localhost:8000/mcp"
+        }
+    }
+}
+```
 
+Tools will be available as: `production_list_objects`, `development_list_objects`, etc.
+
+#### Claude Desktop (STDIO Transport)
+
+For stdio transport, configure Claude Desktop in `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+**Single database:**
 ```json
 {
     "mcpServers": {
@@ -221,6 +488,98 @@ In `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS):
     }
 }
 ```
+
+**Multiple databases:**
+```json
+{
+    "mcpServers": {
+        "postgres": {
+            "command": "uv",
+            "args": ["run", "postgres-mcp", "--transport", "stdio"],
+            "env": {
+                "DATABASES__PRODUCTION__DATABASE_URI": "postgresql://user:pass@localhost:5432/prod",
+                "DATABASES__PRODUCTION__ROLE": "full",
+                "DATABASES__PRODUCTION__ACCESS_MODE": "restricted",
+                "DATABASES__DEVELOPMENT__DATABASE_URI": "postgresql://user:pass@localhost:5432/dev",
+                "DATABASES__DEVELOPMENT__ROLE": "full",
+                "DATABASES__DEVELOPMENT__ACCESS_MODE": "unrestricted"
+            }
+        }
+    }
+}
+```
+
+All tools will be available with prefixes: `production_list_objects`, `development_list_objects`, etc.
+
+## Multi-Server Architecture
+
+The server supports two mounting modes for multiple databases:
+
+### Server Composition (endpoint=false)
+
+When `endpoint=false` (default), all databases are mounted in the main endpoint using FastMCP's Server Composition feature. Tools are automatically prefixed with the server name to prevent conflicts.
+
+**Configuration:**
+```json
+{
+    "transport": "http",
+    "databases": {
+        "production": {
+            "database_uri": "postgresql://...",
+            "endpoint": false
+        },
+        "development": {
+            "database_uri": "postgresql://...",
+            "endpoint": false
+        }
+    }
+}
+```
+
+**Result:**
+- All tools available at: `http://localhost:8000/mcp`
+- Tools prefixed: `production_list_objects`, `development_list_objects`, etc.
+- Single endpoint for all databases
+
+### Separate Endpoints (endpoint=true)
+
+When `endpoint=true`, each database gets its own HTTP endpoint. This allows different transport types per server and better isolation.
+
+**Configuration:**
+```json
+{
+    "transport": "http",
+    "databases": {
+        "app1": {
+            "database_uri": "postgresql://...",
+            "endpoint": true,
+            "transport": "http"
+        },
+        "app2": {
+            "database_uri": "postgresql://...",
+            "endpoint": true,
+            "transport": "streamable-http"
+        }
+    }
+}
+```
+
+**Result:**
+- App1 tools at: `http://localhost:8000/app1/mcp`
+- App2 tools at: `http://localhost:8000/app2/mcp`
+- Each endpoint can have different transport types
+- Tools always prefixed with server name
+
+### Tool Prefixes
+
+Tool prefixes are automatically added based on the server name to prevent conflicts when multiple MCP servers are connected to a single agent.
+
+**Rules:**
+- Single server with no explicit prefix: no prefix (tools: `list_objects`, `execute_sql`)
+- Single server with explicit prefix: uses prefix (tools: `mydb_list_objects`, `mydb_execute_sql`)
+- Multiple servers: always prefixed with server name (tools: `db1_list_objects`, `db2_list_objects`)
+
+For detailed architecture documentation, see [Multi-Endpoint Server Architecture](./docs/architecture/multi-endpoint-server.md).
 
 ## Technical Details
 
@@ -237,7 +596,9 @@ This fork has been completely rewritten on top of [FastMCP](https://gofastmcp.co
 
 The project supports working with multiple databases simultaneously. Each database is configured separately with its own access mode and connection parameters.
 
-When using HTTP transport with multiple databases configured, tools will be available with server name prefixes (Server Composition).
+When using HTTP transport with multiple databases configured:
+- With `endpoint=false`: tools available at main endpoint with prefixes (Server Composition)
+- With `endpoint=true`: each database gets its own endpoint at `/{server_name}/mcp`
 
 ### Lifecycle Management
 
@@ -274,10 +635,12 @@ The server provides functionality via [MCP tools](https://modelcontextprotocol.i
 | `analyze_query_indexes` | Analyzes a list of specific SQL queries (up to 10) and recommends optimal indexes for them |
 | `analyze_db_health` | Performs comprehensive health checks including: buffer cache hit rates, connection health, constraint validation, index health (duplicate/unused/invalid), sequence limits, and vacuum health |
 
-### Access Mode Limitations
+### Access Control Limitations
 
-- **USER_RO/USER_RW**: Only basic tools available (`list_schemas`, `list_objects`, `get_object_details`, `execute_sql`)
-- **ADMIN_RO/ADMIN_RW**: All tools available, including performance analysis and index tuning
+- **`user` role**: Only basic tools available (`list_objects`, `get_object_details`, `explain_query`, `execute_sql`)
+- **`full` role**: All tools available (basic tools + `list_schemas`, `analyze_workload_indexes`, `analyze_query_indexes`, `analyze_db_health`, `get_top_queries`)
+- **`restricted` access_mode**: Only SELECT queries allowed
+- **`unrestricted` access_mode**: DML (INSERT/UPDATE/DELETE) allowed; DDL allowed only for `full` role
 
 ## PostgreSQL Extension Installation (Optional)
 
@@ -301,6 +664,118 @@ If your Postgres database is running on a cloud provider managed service (AWS RD
 If you are managing your own Postgres installation, you may need to do additional work:
 - Before loading the `pg_stat_statements` extension, ensure it is listed in `shared_preload_libraries` in the Postgres configuration file
 - The `hypopg` extension may require additional system-level installation (e.g., via your package manager) because it does not always ship with Postgres
+
+## Configuration Examples
+
+### Example 1: Production and Development Databases
+
+Separate production (read-only) and development (read-write) databases:
+
+```json
+{
+    "name": "postgres-fastmcp",
+    "transport": "http",
+    "host": "0.0.0.0",
+    "port": 8000,
+    "endpoint": "mcp",
+    "databases": {
+        "production": {
+            "database_uri": "postgresql://user:password@prod-server:5432/production",
+            "role": "full",
+            "access_mode": "restricted",
+            "endpoint": false
+        },
+        "development": {
+            "database_uri": "postgresql://user:password@localhost:5432/development",
+            "role": "full",
+            "access_mode": "unrestricted",
+            "endpoint": false
+        }
+    }
+}
+```
+
+Tools available at `http://localhost:8000/mcp`:
+- `production_list_objects`, `production_execute_sql` (read-only)
+- `development_list_objects`, `development_execute_sql` (read-write)
+
+### Example 2: Separate Endpoints for Different Apps
+
+Each application gets its own endpoint:
+
+```json
+{
+    "name": "postgres-fastmcp",
+    "transport": "http",
+    "host": "0.0.0.0",
+    "port": 8000,
+    "endpoint": "mcp",
+    "databases": {
+        "analytics": {
+            "database_uri": "postgresql://user:password@localhost:5432/analytics",
+            "role": "full",
+            "access_mode": "restricted",
+            "endpoint": true,
+            "transport": "streamable-http"
+        },
+        "main": {
+            "database_uri": "postgresql://user:password@localhost:5432/main",
+            "role": "user",
+            "access_mode": "unrestricted",
+            "endpoint": true,
+            "transport": "http"
+        }
+    }
+}
+```
+
+Endpoints:
+- Analytics: `http://localhost:8000/analytics/mcp` (streaming enabled)
+- Main: `http://localhost:8000/main/mcp` (standard HTTP)
+
+### Example 3: STDIO Mode with Multiple Databases
+
+For Claude Desktop or other stdio-based clients:
+
+```json
+{
+    "transport": "stdio",
+    "databases": {
+        "db1": {
+            "database_uri": "postgresql://user:password@localhost:5432/db1",
+            "role": "full",
+            "access_mode": "restricted"
+        },
+        "db2": {
+            "database_uri": "postgresql://user:password@localhost:5432/db2",
+            "role": "user",
+            "access_mode": "unrestricted"
+        }
+    }
+}
+```
+
+All tools available with prefixes: `db1_list_objects`, `db2_list_objects`, etc.
+
+### Example 4: User Role with Restricted Access
+
+Basic user access with read-only SQL:
+
+```json
+{
+    "transport": "http",
+    "databases": {
+        "readonly": {
+            "database_uri": "postgresql://readonly_user:password@localhost:5432/mydb",
+            "role": "user",
+            "access_mode": "restricted",
+            "endpoint": false
+        }
+    }
+}
+```
+
+Available tools (4): `list_objects`, `get_object_details`, `explain_query`, `execute_sql` (SELECT only)
 
 ## Usage Examples
 
@@ -405,7 +880,7 @@ This fork differs from the original [postgres-mcp](https://github.com/crystaldba
 |------------------|-----------|
 | Standard MCP implementation | FastMCP framework |
 | Single database per server | Multiple databases |
-| Modes: restricted/unrestricted | Modes: USER_RO, USER_RW, ADMIN_RO, ADMIN_RW |
+| Modes: restricted/unrestricted | Modes: role (user/full) + access_mode (restricted/unrestricted) |
 | SSE transport only | HTTP, stdio, streamable-http |
 | Configuration via CLI/env | Configuration via config.json + env |
 

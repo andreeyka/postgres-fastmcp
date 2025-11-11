@@ -1,28 +1,22 @@
 """Module for creating and registering MCP tools."""
 
 from types import TracebackType
-from typing import Any, ClassVar, Literal, Self, cast
+from typing import Any, Literal, Self, cast
 
 from fastmcp import Context, FastMCP
 from pydantic import Field
 
 from postgres_mcp.common import ErrorResult
-from postgres_mcp.config import DatabaseConfig, settings
+from postgres_mcp.config import AVAILABLE_TOOLS, DatabaseConfig, settings
 from postgres_mcp.database_health import DatabaseHealthTool
-from postgres_mcp.enums import AccessMode
+from postgres_mcp.enums import AccessMode, ToolName, UserRole
 from postgres_mcp.explain import ExplainPlanArtifact, ExplainPlanTool
 from postgres_mcp.index.dta_calc import DatabaseTuningAdvisor
 from postgres_mcp.index.index_opt_base import MAX_NUM_INDEX_TUNING_QUERIES, IndexTuningBase
 from postgres_mcp.index.llm_opt import LLMOptimizerTool
 from postgres_mcp.index.presentation import TextPresentation
 from postgres_mcp.logger import get_logger
-from postgres_mcp.sql import (
-    DbConnPool,
-    SafeSqlConfig,
-    SafeSqlDriver,
-    SqlDriver,
-    check_hypopg_installation_status,
-)
+from postgres_mcp.sql import DbConnPool, SafeSqlConfig, SafeSqlDriver, SqlDriver, check_hypopg_installation_status
 from postgres_mcp.top_queries import TopQueriesCalc
 
 from .constants import (
@@ -54,10 +48,12 @@ from .descriptions import (
     DESC_EXECUTE_SQL_RESTRICTED,
     DESC_EXECUTE_SQL_UNRESTRICTED,
     DESC_EXPLAIN_QUERY,
-    DESC_GET_OBJECT_DETAILS,
+    DESC_GET_OBJECT_DETAILS_FULL,
+    DESC_GET_OBJECT_DETAILS_USER,
     DESC_GET_TOP_QUERIES,
     DESC_HYPOTHETICAL_INDEXES,
-    DESC_LIST_OBJECTS,
+    DESC_LIST_OBJECTS_FULL,
+    DESC_LIST_OBJECTS_USER,
     DESC_LIST_SCHEMAS,
 )
 from .queries import (
@@ -86,18 +82,40 @@ class ToolManager:
     Encapsulates all tools for working with PostgreSQL through the MCP protocol.
     """
 
-    # Base mapping of tool method names to their configuration
-    # Each tool has description and enabled flag
-    _TOOLS_BASE: ClassVar[dict[str, dict[str, Any]]] = {
-        "list_schemas": {"description": DESC_LIST_SCHEMAS, "enabled": True},
-        "list_objects": {"description": DESC_LIST_OBJECTS, "enabled": True},
-        "get_object_details": {"description": DESC_GET_OBJECT_DETAILS, "enabled": True},
-        "explain_query": {"description": DESC_EXPLAIN_QUERY, "enabled": True},
-        "analyze_workload_indexes": {"description": DESC_ANALYZE_WORKLOAD_INDEXES, "enabled": True},
-        "analyze_query_indexes": {"description": DESC_ANALYZE_QUERY_INDEXES, "enabled": True},
-        "analyze_db_health": {"description": DESC_ANALYZE_DB_HEALTH, "enabled": True},
-        "get_top_queries": {"description": DESC_GET_TOP_QUERIES, "enabled": True},
-    }
+    # Tools configuration will be set from DatabaseConfig.tools in __init__
+
+    def _get_tool_description(self, tool_name: ToolName) -> str:
+        """Get tool description based on role and access_mode.
+
+        Args:
+            tool_name: Name of the tool.
+
+        Returns:
+            Tool description string.
+        """
+        # Role-specific descriptions
+        if tool_name == ToolName.LIST_OBJECTS:
+            return DESC_LIST_OBJECTS_USER if self.role == UserRole.USER else DESC_LIST_OBJECTS_FULL
+
+        if tool_name == ToolName.GET_OBJECT_DETAILS:
+            return DESC_GET_OBJECT_DETAILS_USER if self.role == UserRole.USER else DESC_GET_OBJECT_DETAILS_FULL
+
+        if tool_name == ToolName.EXECUTE_SQL:
+            if self.role == UserRole.FULL and self.access_mode == AccessMode.UNRESTRICTED:
+                return DESC_EXECUTE_SQL_UNRESTRICTED
+            return DESC_EXECUTE_SQL_RESTRICTED
+
+        # Static descriptions (same for all roles)
+        descriptions_map: dict[ToolName, str] = {
+            ToolName.LIST_SCHEMAS: DESC_LIST_SCHEMAS,
+            ToolName.EXPLAIN_QUERY: DESC_EXPLAIN_QUERY,
+            ToolName.ANALYZE_WORKLOAD_INDEXES: DESC_ANALYZE_WORKLOAD_INDEXES,
+            ToolName.ANALYZE_QUERY_INDEXES: DESC_ANALYZE_QUERY_INDEXES,
+            ToolName.ANALYZE_DB_HEALTH: DESC_ANALYZE_DB_HEALTH,
+            ToolName.GET_TOP_QUERIES: DESC_GET_TOP_QUERIES,
+        }
+
+        return descriptions_map.get(tool_name, "")
 
     def __init__(
         self,
@@ -110,43 +128,29 @@ class ToolManager:
         """
         self.config = config
         self.access_mode = config.access_mode
+        self.role = config.role
         # Create database connection pool from config
         self.db_connection = DbConnPool(
             connection_url=config.database_uri.get_secret_value(),
             min_size=config.pool_min_size,
             max_size=config.pool_max_size,
         )
-        # Build tools mapping with dynamic description for execute_sql
-        # Filter tools based on access mode
-        base_tools = dict(self._TOOLS_BASE)
+        # Build tools mapping with dynamic descriptions based on role and access_mode
+        # All descriptions are set through _get_tool_description method for consistency
+        self._tools: dict[str, dict[str, Any]] = {}
 
-        # USER modes: only basic tools
-        if self.access_mode.is_user_mode:
-            # Remove admin tools for USER modes
-            admin_tools = {
-                "list_schemas",
-                "analyze_workload_indexes",
-                "analyze_query_indexes",
-                "analyze_db_health",
-                "get_top_queries",
+        # Get enabled tools from config (config handles role-based defaults and explicit settings)
+        tools_to_enable = self.config.get_enabled_tools()
+
+        # Build tools configuration with descriptions
+        # Use tool_name.value as key for compatibility with FastMCP (expects string keys)
+        for tool_name in AVAILABLE_TOOLS:
+            is_enabled = tool_name in tools_to_enable
+
+            self._tools[tool_name.value] = {
+                "description": self._get_tool_description(tool_name),
+                "enabled": is_enabled,
             }
-            for tool_name in admin_tools:
-                if tool_name in base_tools:
-                    base_tools[tool_name] = {**base_tools[tool_name], "enabled": False}
-
-        # Determine execute_sql description
-        if self.access_mode == AccessMode.ADMIN_RW:
-            execute_sql_desc = DESC_EXECUTE_SQL_UNRESTRICTED
-        else:
-            execute_sql_desc = DESC_EXECUTE_SQL_RESTRICTED
-
-        self._tools = {
-            **base_tools,
-            "execute_sql": {
-                "description": execute_sql_desc,
-                "enabled": True,
-            },
-        }
         # Lazy-loaded SQL driver (created on first access)
         self._sql_driver: SqlDriver | SafeSqlDriver | None = None
 
@@ -210,34 +214,70 @@ class ToolManager:
 
         base_driver = SqlDriver(conn=self.db_connection)
 
-        # ADMIN_RW uses unrestricted SqlDriver
-        if self.access_mode == AccessMode.ADMIN_RW:
+        # FULL role with UNRESTRICTED access_mode uses unrestricted SqlDriver
+        if self.role == UserRole.FULL and self.access_mode == AccessMode.UNRESTRICTED:
             logger.debug(LOG_UNRESTRICTED_SQL_DRIVER)
             self._sql_driver = base_driver
         else:
             # All other modes use SafeSqlDriver with different restrictions
-            config = SafeSqlConfig(
+            safe_config = SafeSqlConfig(
                 timeout=self.config.safe_sql_timeout,
-                allowed_schema=self.access_mode.allowed_schema,
-                read_only=self.access_mode.is_read_only,
+                allowed_schema=self._allowed_schema(),
+                read_only=self._is_read_only(),
                 query_tag=settings.name,
-                table_prefix=self.config.table_prefix if self.access_mode.is_user_mode else None,
+                table_prefix=self.config.table_prefix if self.role == UserRole.USER else None,
             )
 
             logger.debug(
-                "Using SafeSqlDriver (mode=%s, allowed_schema=%s, read_only=%s, timeout=%ss, table_prefix=%s)",
+                "Using SafeSqlDriver (role=%s, access_mode=%s, allowed_schema=%s, "
+                "read_only=%s, timeout=%ss, table_prefix=%s)",
+                self.role.value,
                 self.access_mode.value,
-                config.allowed_schema,
-                config.read_only,
-                config.timeout,
-                config.table_prefix,
+                safe_config.allowed_schema,
+                safe_config.read_only,
+                safe_config.timeout,
+                safe_config.table_prefix,
             )
             self._sql_driver = SafeSqlDriver(
                 sql_driver=base_driver,
-                config=config,
+                config=safe_config,
             )
 
         return self._sql_driver
+
+    def _is_user_mode(self) -> bool:
+        """Check if the role is user mode (limited to public schema).
+
+        Returns:
+            True if role is USER, False otherwise.
+        """
+        return self.role == UserRole.USER
+
+    def _is_read_only(self) -> bool:
+        """Check if the access mode is read-only.
+
+        Returns:
+            True if access_mode is RESTRICTED, False otherwise.
+        """
+        return self.access_mode == AccessMode.RESTRICTED
+
+    def _allowed_schema(self) -> str | None:
+        """Get the allowed schema for this role.
+
+        Returns:
+            'public' for USER role, None for FULL role (all schemas allowed).
+        """
+        if self.role == UserRole.USER:
+            return "public"
+        return None
+
+    def _has_full_access(self) -> bool:
+        """Check if the role has full access (all schemas, all tools).
+
+        Returns:
+            True if role is FULL, False otherwise.
+        """
+        return self.role == UserRole.FULL
 
     def _format_error_response(self, error: str) -> ResponseType:
         """Format an error response.
@@ -253,8 +293,8 @@ class ToolManager:
     async def list_schemas(self) -> ResponseType:
         """List all schemas in the database."""
         try:
-            # USER modes: return only public schema
-            if self.access_mode.is_user_mode:
+            # USER role: return only public schema
+            if self._is_user_mode():
                 return [
                     {
                         "schema_name": "public",
@@ -263,7 +303,7 @@ class ToolManager:
                     }
                 ]
 
-            # ADMIN modes: return all schemas
+            # FULL role: return all schemas
             sql_driver = self.sql_driver
             rows = await sql_driver.execute_query(QUERY_LIST_SCHEMAS)
             schemas = [decode_bytes_to_utf8(row.cells) for row in rows] if rows else []
@@ -288,8 +328,8 @@ class ToolManager:
     ) -> ResponseType:
         """List objects of a given type in a schema."""
         try:
-            # USER modes: force schema to public
-            if self.access_mode.is_user_mode:
+            # USER role: force schema to public
+            if self._is_user_mode():
                 if schema_name and schema_name.lower() != "public":
                     return self._format_error_response(
                         f"Access to schema '{schema_name}' is not allowed. Only 'public' schema is permitted."
@@ -317,14 +357,10 @@ class ToolManager:
                     if rows
                     else []
                 )
-                # Filter by table_prefix in user mode
-                if self.access_mode.is_user_mode and self.config.table_prefix:
+                # Filter by table_prefix in user role
+                if self._is_user_mode() and self.config.table_prefix:
                     prefix_lower = self.config.table_prefix.lower()
-                    objects = [
-                        obj
-                        for obj in objects
-                        if obj["name"].lower().startswith(prefix_lower)
-                    ]
+                    objects = [obj for obj in objects if obj["name"].lower().startswith(prefix_lower)]
 
             elif object_type == "sequence":
                 rows = await SafeSqlDriver.execute_param_query(
@@ -344,14 +380,10 @@ class ToolManager:
                     if rows
                     else []
                 )
-                # Filter by table_prefix in user mode
-                if self.access_mode.is_user_mode and self.config.table_prefix:
+                # Filter by table_prefix in user role
+                if self._is_user_mode() and self.config.table_prefix:
                     prefix_lower = self.config.table_prefix.lower()
-                    objects = [
-                        obj
-                        for obj in objects
-                        if obj["name"].lower().startswith(prefix_lower)
-                    ]
+                    objects = [obj for obj in objects if obj["name"].lower().startswith(prefix_lower)]
 
             elif object_type == "extension":
                 # Extensions are not schema-specific
@@ -399,8 +431,8 @@ class ToolManager:
     ) -> ResponseType:
         """Get detailed information about a database object."""
         try:
-            # USER modes: validate and force schema to public
-            if self.access_mode.is_user_mode:
+            # USER role: validate and force schema to public
+            if self._is_user_mode():
                 if schema_name and schema_name.lower() != "public":
                     return self._format_error_response(
                         f"Access to schema '{schema_name}' is not allowed. Only 'public' schema is permitted."
@@ -521,7 +553,7 @@ class ToolManager:
             logger.error(LOG_ERROR_GETTING_OBJECT_DETAILS.format(str(e)))
             return self._format_error_response(str(e))
         else:
-            # Декодируем весь результат для корректной сериализации в JSON
+            # Decode the entire result for correct JSON serialization
             decoded_result = decode_bytes_to_utf8(result)
             return cast("ResponseType", decoded_result)
 
@@ -593,7 +625,8 @@ class ToolManager:
             default="all",
             description=(
                 "SQL query as string value to execute against the database. For read-only modes, "
-                "only SELECT queries are allowed. For ADMIN_RW mode, any SQL statement (DDL, DML, DCL) is permitted"
+                "only SELECT queries are allowed. For 'full' role with 'unrestricted' access_mode, "
+                "any SQL statement (DDL, DML, DCL) is permitted"
             ),
         ),
     ) -> ResponseType:
@@ -603,7 +636,7 @@ class ToolManager:
             rows = await sql_driver.execute_query(sql)
             if rows is None:
                 return ERROR_NO_RESULTS
-            # Декодируем байты в UTF-8 перед возвратом для корректной сериализации в JSON
+            # Decode bytes to UTF-8 before returning for correct JSON serialization
             return [decode_bytes_to_utf8(r.cells) for r in rows]
         except Exception as e:
             logger.error(LOG_ERROR_EXECUTING_QUERY.format(str(e)))

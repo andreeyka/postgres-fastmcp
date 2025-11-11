@@ -7,23 +7,27 @@
         "user_ro_db": {
             "database_uri": "postgresql://user_ro:password@postgres:5432/user_ro_db",
             "transport": "http",
-            "access_mode": "user_ro",
+            "role": "user",
+            "access_mode": "restricted",
             "table_prefix": "app_"
         },
         "user_rw_db": {
             "database_uri": "postgresql://user_rw:password@postgres:5432/user_rw_db",
             "transport": "http",
-            "access_mode": "user_rw"
+            "role": "user",
+            "access_mode": "unrestricted"
         },
         "admin_ro_db": {
             "database_uri": "postgresql://admin_ro:password@postgres:5432/admin_ro_db",
             "transport": "http",
-            "access_mode": "admin_ro"
+            "role": "full",
+            "access_mode": "restricted"
         },
         "admin_rw_db": {
             "database_uri": "postgresql://postgres:postgres@postgres:5432/admin_rw_db",
             "transport": "http",
-            "access_mode": "admin_rw"
+            "role": "full",
+            "access_mode": "unrestricted"
         }
     },
     "host": "0.0.0.0",

@@ -3,16 +3,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from postgres_mcp.enums import AccessMode
+from postgres_mcp.enums import AccessMode, UserRole
 from postgres_mcp.sql import SafeSqlDriver, SqlDriver
 
 
 @pytest.mark.asyncio
 async def test_force_readonly_enforcement():
     """
-    Test that force_readonly is properly enforced based on access mode:
-    - In ADMIN_RO mode: SafeSqlDriver always uses read_only=True (ignores force_readonly parameter)
-    - In ADMIN_RW mode: SqlDriver respects the force_readonly parameter (default False)
+    Test that force_readonly is properly enforced based on role and access_mode:
+    - In FULL+RESTRICTED mode: SafeSqlDriver always uses read_only=True (ignores force_readonly parameter)
+    - In FULL+UNRESTRICTED mode: SqlDriver respects the force_readonly parameter (default False)
     """
     from pydantic import SecretStr
 
@@ -39,10 +39,11 @@ async def test_force_readonly_enforcement():
     mock_pool.connection = MagicMock(return_value=mock_pool_connection_cm)
     mock_conn_pool.pool_connect = AsyncMock(return_value=mock_pool)
 
-    # Test ADMIN_RW mode (unrestricted - uses SqlDriver)
+    # Test FULL+UNRESTRICTED mode (unrestricted - uses SqlDriver)
     config_rw = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
-        access_mode=AccessMode.ADMIN_RW,
+        role=UserRole.FULL,
+        access_mode=AccessMode.UNRESTRICTED,
     )
 
     tool_manager = ToolManager(config=config_rw)
@@ -73,10 +74,11 @@ async def test_force_readonly_enforcement():
         # Check that force_readonly=False is respected
         assert mock_execute.call_args[1]["force_readonly"] is False
 
-    # Test ADMIN_RO mode (restricted - uses SafeSqlDriver with read_only=True)
+    # Test FULL+RESTRICTED mode (restricted - uses SafeSqlDriver with read_only=True)
     config_ro = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
-        access_mode=AccessMode.ADMIN_RO,
+        role=UserRole.FULL,
+        access_mode=AccessMode.RESTRICTED,
     )
 
     # Create new mock pool for this test

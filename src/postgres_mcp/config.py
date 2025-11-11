@@ -1,4 +1,4 @@
-"""Application configuration."""
+"""Application configuration and settings."""
 
 from __future__ import annotations
 
@@ -7,57 +7,15 @@ import warnings
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, SecretStr, model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from postgres_mcp.enums import AccessMode, TransportConfig, TransportHttpApp
+from postgres_mcp.enums import TransportConfig, TransportHttpApp
+from postgres_mcp.models import ADMIN_TOOLS, AVAILABLE_TOOLS, DatabaseConfig, ToolsConfig
 
 
-class DatabaseConfig(BaseModel):
-    """Database server configuration."""
-
-    database_uri: SecretStr = Field(description="Database connection URL")
-    endpoint: bool = Field(
-        default=False,
-        description=(
-            "If True, server is mounted as a separate HTTP endpoint at path `/{server_name}/mcp`. "
-            "If False, server is mounted in the main endpoint via FastMCP mount() (Server Composition)."
-        ),
-    )
-    transport: str = Field(
-        default="http",
-        description=(
-            "HTTP transport type for this server: 'http' or 'streamable-http'. "
-            "Only used when main transport is 'http'. "
-            "Default: 'http'."
-        ),
-    )
-    extra_kwargs: dict[str, str] = Field(default_factory=dict, description="Extra keyword arguments")
-    access_mode: AccessMode = Field(
-        default=AccessMode.USER_RO,
-        description=(
-            "Access mode for the server. "
-            "Available modes: USER_RO (only public schema, read-only, basic tools), "
-            "USER_RW (only public schema, read-write, basic tools), "
-            "ADMIN_RO (all schemas, read-only, all tools), "
-            "ADMIN_RW (all schemas, full access, all tools)."
-        ),
-    )
-    # Connection pool settings
-    pool_min_size: int = Field(default=1, description="Minimum number of connections in the pool")
-    pool_max_size: int = Field(default=5, description="Maximum number of connections in the pool")
-    safe_sql_timeout: int = Field(
-        default=30, description="Timeout in seconds for SafeSqlDriver (for non-ADMIN_RW modes)"
-    )
-    table_prefix: str | None = Field(
-        default=None,
-        description=(
-            "Optional table name prefix for user_* modes. "
-            "If set, only tables/views/sequences with names starting with this prefix are accessible. "
-            "Works only for USER_RO and USER_RW access modes. "
-            "Ignored for admin modes."
-        ),
-    )
+# Re-export for backward compatibility
+__all__ = ["ADMIN_TOOLS", "AVAILABLE_TOOLS", "DatabaseConfig", "Settings", "ToolsConfig", "get_settings", "settings"]
 
 
 class Settings(BaseSettings):
@@ -100,20 +58,22 @@ class Settings(BaseSettings):
 
         Rules:
         - If transport='stdio', server transport parameter is ignored
-        - If transport='http', server transport must be 'http' or 'streamable-http'
+        - If transport='http' and endpoint=True, server transport must be 'http', 'streamable-http', or None
+        - If endpoint=False, server transport is ignored
         """
-        # Validate server transport values
+        # Validate server transport values only for servers with endpoint=True
         if self.transport == TransportConfig.HTTP and self.databases:
-            valid_transports = {TransportHttpApp.HTTP.value, TransportHttpApp.STREAMABLE_HTTP.value}
+            valid_transports = {TransportHttpApp.HTTP.value, TransportHttpApp.STREAMABLE_HTTP.value, None}
             for server_name, server_config in self.databases.items():
-                if server_config.transport not in valid_transports:
+                # Only validate transport if endpoint=True
+                if server_config.endpoint and server_config.transport not in valid_transports:
                     warnings.warn(
                         f"Server '{server_name}' has invalid transport '{server_config.transport}'. "
-                        f"Must be 'http' or 'streamable-http'. Using 'http' as default.",
+                        f"Must be 'http' or 'streamable-http'. Using global transport as default.",
                         UserWarning,
                         stacklevel=2,
                     )
-                    server_config.transport = TransportHttpApp.HTTP.value
+                    server_config.transport = None
 
         return self
 
@@ -151,7 +111,11 @@ class Settings(BaseSettings):
         if not main_endpoint_servers:
             return False
         # Use first server's transport (all should be the same for main endpoint)
-        return main_endpoint_servers[0].transport == TransportHttpApp.STREAMABLE_HTTP.value
+        # If transport is None, default to non-streamable (http)
+        first_server_transport = main_endpoint_servers[0].transport
+        if first_server_transport is None:
+            return False
+        return first_server_transport == TransportHttpApp.STREAMABLE_HTTP.value
 
     @property
     def server_names(self) -> list[str]:

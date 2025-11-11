@@ -26,7 +26,9 @@ class StdioServerBuilder(BaseServerBuilder):
         self.register_tool_mode_servers(transport_type=TransportConfig.STDIO)
 
         # Run FastMCP server in stdio mode
-        await self.main_mcp.run_stdio_async(show_banner=False)
+        # Disable banner and set log_level to CRITICAL to suppress all FastMCP logging
+        # (including startup messages) to avoid interfering with MCP protocol
+        await self.main_mcp.run_stdio_async(show_banner=False, log_level="CRITICAL")
 
 
 async def run_stdio(config: Settings | None = None) -> None:

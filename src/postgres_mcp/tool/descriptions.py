@@ -16,20 +16,41 @@ DESC_LIST_SCHEMAS = (
     "Example workflow: 1) list_schemas, 2) list_objects with schema_name, 3) get_object_details for specific objects."
 )
 
-DESC_LIST_OBJECTS = (
+# Descriptions for user role (only public schema)
+DESC_LIST_OBJECTS_USER = (
+    "List objects (tables, views, sequences, or extensions) in the 'public' schema. "
+    "Input: schema_name (optional, will be automatically set to 'public') and object_type (optional: 'table', 'view', 'sequence', or 'extension', default: 'table'). "
+    "Output: JSON array of object names with their types. "
+    "\n\nIMPORTANT: You have access only to the 'public' schema. The schema_name parameter is automatically set to 'public' if not specified. "
+    "After listing objects, use get_object_details to examine the structure of specific objects. "
+    "Example Input: object_type='table' (schema_name will be 'public' automatically)"
+)
+
+DESC_GET_OBJECT_DETAILS_USER = (
+    "Show detailed information about a database object (table, view, sequence, or extension) in the 'public' schema. "
+    "Input: schema_name (optional, will be automatically set to 'public'), object_name (required), and object_type (optional: 'table', 'view', 'sequence', or 'extension', default: 'table'). "
+    "Output: Detailed object information including columns, constraints, indexes (for tables), and other metadata. "
+    "\n\nIMPORTANT: You have access only to the 'public' schema. The schema_name parameter is automatically set to 'public' if not specified. "
+    "Use this tool after list_objects to understand the structure of tables before writing SQL queries. "
+    "This tool shows column names, data types, constraints, and indexes - essential information for writing correct SQL. "
+    "Example workflow: 1) list_objects, 2) get_object_details, 3) execute_sql with proper column names."
+)
+
+# Descriptions for full role (all schemas)
+DESC_LIST_OBJECTS_FULL = (
     "List objects (tables, views, sequences, or extensions) in a specified schema. "
     "Input: schema_name (required) and object_type (optional: 'table', 'view', 'sequence', or 'extension', default: 'table'). "
     "Output: JSON array of object names with their types. "
-    "IMPORTANT: Use this tool after list_schemas to discover what objects exist in a schema. "
+    "\n\nIMPORTANT: Use this tool after list_schemas to discover what objects exist in a schema. "
     "Then use get_object_details to examine the structure of specific objects. "
     "Example Input: schema_name='public', object_type='table'"
 )
 
-DESC_GET_OBJECT_DETAILS = (
+DESC_GET_OBJECT_DETAILS_FULL = (
     "Show detailed information about a database object (table, view, sequence, or extension). "
-    "Input: schema_name, object_name, and object_type (optional: 'table', 'view', 'sequence', or 'extension', default: 'table'). "
+    "Input: schema_name (required), object_name (required), and object_type (optional: 'table', 'view', 'sequence', or 'extension', default: 'table'). "
     "Output: Detailed object information including columns, constraints, indexes (for tables), and other metadata. "
-    "IMPORTANT: Use this tool after list_objects to understand the structure of tables before writing SQL queries. "
+    "\n\nIMPORTANT: Use this tool after list_objects to understand the structure of tables before writing SQL queries. "
     "This tool shows column names, data types, constraints, and indexes - essential information for writing correct SQL. "
     "Example workflow: 1) list_schemas, 2) list_objects, 3) get_object_details, 4) execute_sql with proper column names."
 )
@@ -44,7 +65,7 @@ DESC_EXPLAIN_QUERY = (
     "Input: sql (required) - a SQL SELECT query, analyze (optional, default: False) - if True, actually runs the query "
     "to show real execution statistics instead of estimates, hypothetical_indexes (optional) - list of hypothetical indexes to test. "
     "Output: Detailed execution plan with costs, actual times (if analyze=True), and recommendations. "
-    "IMPORTANT: Use this tool to optimize queries before executing them. "
+    "\n\nIMPORTANT: Use this tool to optimize queries before executing them. "
     "If analyze=True, the query will actually run - use with caution on large tables. "
     "You can test hypothetical indexes without creating them using the hypothetical_indexes parameter. "
     "Example workflow: 1) explain_query to check plan, 2) optimize query or add indexes, 3) execute_sql to run the final query."
@@ -60,15 +81,16 @@ DESC_EXECUTE_SQL_UNRESTRICTED = (
     "Example: Use for CREATE TABLE, INSERT, UPDATE, DELETE, ALTER, and other DDL/DML operations."
 )
 
+# Restricted execute_sql description (used for both user and full roles with restricted access_mode)
 DESC_EXECUTE_SQL_RESTRICTED = (
     "Execute a read-only SQL query against the database. "
     "Input: sql - a SQL SELECT query (read-only operations only). "
     "Output: Query results as JSON array of rows. "
-    "IMPORTANT: Only SELECT queries are allowed. DDL (CREATE, ALTER, DROP), DML (INSERT, UPDATE, DELETE), "
+    "\n\nIMPORTANT: Only SELECT queries are allowed. DDL (CREATE, ALTER, DROP), DML (INSERT, UPDATE, DELETE), "
     "and DCL (GRANT, REVOKE) operations are blocked. "
-    "This is the MAIN tool to use after you have explored the schema with list_schemas, list_objects, and get_object_details. "
+    "This is the MAIN tool to use after you have explored the schema with list_objects and get_object_details. "
     "Always use existing columns and tables from the schema - do not invent fields. "
-    "Example workflow: 1) list_schemas, 2) list_objects, 3) get_object_details, 4) execute_sql (THIS TOOL) to get actual data."
+    "Example workflow: 1) list_objects, 2) get_object_details, 3) execute_sql (THIS TOOL) to get actual data."
 )
 
 # ============================================================================
@@ -81,7 +103,7 @@ DESC_ANALYZE_WORKLOAD_INDEXES = (
     "Input: max_index_size_mb (optional, default: 10000) - maximum size for recommended indexes in MB, "
     "method (optional, default: 'dta') - 'dta' for Database Tuning Advisor algorithm or 'llm' for LLM-based optimization. "
     "Output: List of recommended indexes with estimated benefits, sizes, and SQL statements to create them. "
-    "IMPORTANT: The '"
+    "\n\nIMPORTANT: The '"
     + PG_STAT_STATEMENTS
     + "' extension must be enabled and the database must have query statistics. "
     "This tool analyzes actual query patterns from pg_stat_statements, not hypothetical queries. "
@@ -95,7 +117,7 @@ DESC_ANALYZE_QUERY_INDEXES = (
     "max_index_size_mb (optional, default: 10000) - maximum size for recommended indexes in MB, "
     "method (optional, default: 'dta') - 'dta' for Database Tuning Advisor algorithm or 'llm' for LLM-based optimization. "
     "Output: List of recommended indexes with estimated benefits, sizes, and SQL statements to create them. "
-    "IMPORTANT: Provide actual SQL queries that you want to optimize. "
+    "\n\nIMPORTANT: Provide actual SQL queries that you want to optimize. "
     "The 'dta' method uses cost-based analysis with hypothetical indexes (requires hypopg extension). "
     "The 'llm' method uses LLM to analyze query patterns and suggest indexes. "
     "Use analyze_workload_indexes if you want to analyze the entire database workload instead of specific queries. "
@@ -133,7 +155,7 @@ DESC_GET_TOP_QUERIES = (
     "'resources' (resource-intensive queries based on I/O, WAL, and execution time). "
     "limit (optional, default: 10) - number of queries to return. "
     "Output: List of top queries with execution statistics, resource usage, and query text. "
-    "IMPORTANT: The '" + PG_STAT_STATEMENTS + "' extension must be enabled. "
+    "\n\nIMPORTANT: The '" + PG_STAT_STATEMENTS + "' extension must be enabled. "
     "Use this tool to identify slow queries that need optimization. "
     "After identifying slow queries, use explain_query to understand why they're slow, "
     "then use analyze_query_indexes or analyze_workload_indexes to get index recommendations. "
@@ -154,8 +176,8 @@ DESC_HYPOTHETICAL_INDEXES = (
     "Examples: [\n"
     '    {"table": "users", "columns": ["email"], "using": "btree"},\n'
     '    {"table": "orders", "columns": ["user_id", "created_at"]}\n'
-    "]\n"
-    "IMPORTANT: Hypothetical indexes are created using the hypopg extension and are automatically cleaned up. "
+    "]"
+    "\n\nIMPORTANT: Hypothetical indexes are created using the hypopg extension and are automatically cleaned up. "
     "They allow you to test index impact without actually creating indexes. "
     "If there are no hypothetical indexes to test, pass an empty list []."
 )

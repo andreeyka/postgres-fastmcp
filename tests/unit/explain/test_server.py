@@ -7,7 +7,7 @@ import pytest_asyncio
 from pydantic import SecretStr
 
 from postgres_mcp.config import DatabaseConfig
-from postgres_mcp.enums import AccessMode
+from postgres_mcp.enums import AccessMode, UserRole
 from postgres_mcp.tool import ToolManager
 
 
@@ -30,7 +30,8 @@ async def test_tool_manager_has_explain_query():
     """Test that ToolManager has the explain_query method."""
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
-        access_mode=AccessMode.ADMIN_RW,
+        role=UserRole.FULL,
+        access_mode=AccessMode.UNRESTRICTED,
     )
 
     tool_manager = ToolManager(config=config)
@@ -49,7 +50,8 @@ async def test_explain_query_basic():
 
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
-        access_mode=AccessMode.ADMIN_RW,
+        role=UserRole.FULL,
+        access_mode=AccessMode.UNRESTRICTED,
     )
 
     tool_manager = ToolManager(config=config)
@@ -86,7 +88,8 @@ async def test_explain_query_analyze():
 
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
-        access_mode=AccessMode.ADMIN_RW,
+        role=UserRole.FULL,
+        access_mode=AccessMode.UNRESTRICTED,
     )
 
     tool_manager = ToolManager(config=config)
@@ -137,7 +140,8 @@ async def test_explain_query_hypothetical_indexes():
 
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
-        access_mode=AccessMode.ADMIN_RW,
+        role=UserRole.FULL,
+        access_mode=AccessMode.UNRESTRICTED,
     )
 
     tool_manager = ToolManager(config=config)
@@ -186,7 +190,8 @@ async def test_explain_query_error_handling():
 
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
-        access_mode=AccessMode.ADMIN_RW,
+        role=UserRole.FULL,
+        access_mode=AccessMode.UNRESTRICTED,
     )
 
     tool_manager = ToolManager(config=config)

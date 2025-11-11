@@ -27,37 +27,43 @@ from starlette.responses import JSONResponse
 from starlette.routing import Mount
 
 from postgres_mcp.config import DatabaseConfig
-from postgres_mcp.tool.tools import ToolManager
-
 
 # Конфигурация для подчиненных серверов с подключением к БД
-# Разные access_mode дают разные наборы инструментов:
-# - USER_RO: только базовые инструменты (4 шт: list_objects, get_object_details, explain_query, execute_sql)
-# - USER_RW: базовые инструменты + запись (4 шт)
-# - ADMIN_RO: все инструменты (9 шт: все базовые + admin инструменты)
-# - ADMIN_RW: все инструменты + неограниченный execute_sql (9 шт)
+# Разные комбинации role и access_mode дают разные наборы инструментов:
+# - user + restricted: только базовые инструменты (4 шт: list_objects, get_object_details, explain_query, execute_sql)
+# - user + unrestricted: базовые инструменты + запись (4 шт)
+# - full + restricted: все инструменты (9 шт: все базовые + admin инструменты)
+# - full + unrestricted: все инструменты + неограниченный execute_sql (9 шт)
 #
 # Префикс к именам инструментов добавляется автоматически на основе имени сервера:
 # - app1: app1_list_objects, app1_get_object_details, app1_execute_sql, app1_explain_query
 # - app2: app2_list_objects, app2_get_object_details, app2_execute_sql, app2_explain_query
 # - app3: app3_list_schemas, app3_list_objects, app3_execute_sql, ... (все 9 инструментов)
 # - app4: app4_list_schemas, app4_list_objects, app4_execute_sql, ... (все 9 инструментов)
+from postgres_mcp.enums import AccessMode, UserRole
+from postgres_mcp.tool.tools import ToolManager
+
+
 SUB_SERVERS_CONFIG = {
     "app1": DatabaseConfig(
         database_uri=SecretStr("postgresql://postgres:postgres@localhost:5432/db1"),
-        access_mode="user_ro",  # Только базовые инструменты (4 шт)
+        role=UserRole.USER,
+        access_mode=AccessMode.RESTRICTED,  # Только базовые инструменты (4 шт)
     ),
     "app2": DatabaseConfig(
         database_uri=SecretStr("postgresql://postgres:postgres@localhost:5432/db2"),
-        access_mode="user_rw",  # Базовые инструменты + запись (4 шт)
+        role=UserRole.USER,
+        access_mode=AccessMode.UNRESTRICTED,  # Базовые инструменты + запись (4 шт)
     ),
     "app3": DatabaseConfig(
         database_uri=SecretStr("postgresql://postgres:postgres@localhost:5432/db3"),
-        access_mode="admin_ro",  # Все инструменты (9 шт)
+        role=UserRole.FULL,
+        access_mode=AccessMode.RESTRICTED,  # Все инструменты (9 шт)
     ),
     "app4": DatabaseConfig(
         database_uri=SecretStr("postgresql://postgres:postgres@localhost:5432/db4"),
-        access_mode="admin_rw",  # Все инструменты + неограниченный execute_sql (9 шт)
+        role=UserRole.FULL,
+        access_mode=AccessMode.UNRESTRICTED,  # Все инструменты + неограниченный execute_sql (9 шт)
     ),
 }
 
@@ -79,7 +85,10 @@ def create_sub_server(app_name: str, config: DatabaseConfig) -> tuple[FastMCP, T
 
     # Отладочная информация
     db_uri = config.database_uri.get_secret_value()
-    print(f"✓ Создан ToolManager для {app_name}: БД={db_uri}, режим={config.access_mode.value}", flush=True)
+    print(
+        f"✓ Создан ToolManager для {app_name}: БД={db_uri}, role={config.role.value}, access_mode={config.access_mode.value}",
+        flush=True,
+    )
 
     # Регистрируем tools из ToolManager на подчиненном сервере
     tool_manager.register_tools(sub_mcp, prefix=app_name)
@@ -152,6 +161,7 @@ def create_main_server() -> Starlette:
 
         return {
             "app_name": app_name,
+            "role": config.role.value,
             "access_mode": config.access_mode.value,
             "database_uri": masked_uri,
             "pool_min_size": config.pool_min_size,
@@ -173,8 +183,8 @@ def create_main_server() -> Starlette:
         ]
 
         for app_name, config in SUB_SERVERS_CONFIG.items():
-            # Определяем количество tools в зависимости от access_mode
-            if config.access_mode.is_user_mode:
+            # Определяем количество tools в зависимости от role
+            if config.role == UserRole.USER:
                 tools_count = 4  # list_objects, get_object_details, explain_query, execute_sql
             else:
                 tools_count = 9  # все инструменты
@@ -184,6 +194,7 @@ def create_main_server() -> Starlette:
                     "name": app_name,
                     "type": "sub",
                     "endpoint": f"/{app_name}/mcp",
+                    "role": config.role.value,
                     "access_mode": config.access_mode.value,
                     "tools_count": tools_count,
                 }

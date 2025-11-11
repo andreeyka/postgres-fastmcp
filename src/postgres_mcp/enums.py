@@ -11,44 +11,17 @@ MountMode = Literal["tool", "endpoint"]
 
 
 class AccessMode(StrEnum):
-    """SQL access modes for the server."""
+    """SQL access level for the server."""
 
-    # User modes (only public schema)
-    USER_RO = "user_ro"  # User mode: only public schema, read-only, basic tools
-    USER_RW = "user_rw"  # User mode: only public schema, read-write (DML), basic tools
+    RESTRICTED = "restricted"  # Read-only access (SELECT only)
+    UNRESTRICTED = "unrestricted"  # Read-write access (DML: INSERT/UPDATE/DELETE), or full access (DDL) for full role
 
-    # Admin modes (all schemas)
-    ADMIN_RO = "admin_ro"  # Admin mode: all schemas, read-only, all tools
-    ADMIN_RW = "admin_rw"  # Admin mode: all schemas, full access (including DDL), all tools
 
-    @property
-    def is_user_mode(self) -> bool:
-        """Check if the access mode is a user mode (limited to public schema).
+class UserRole(StrEnum):
+    """User role that determines schema access and available tools."""
 
-        Returns:
-            True if the mode is USER_RO or USER_RW, False otherwise.
-        """
-        return self in (AccessMode.USER_RO, AccessMode.USER_RW)
-
-    @property
-    def is_read_only(self) -> bool:
-        """Check if the access mode is read-only.
-
-        Returns:
-            True if the mode is USER_RO or ADMIN_RO, False otherwise.
-        """
-        return self in (AccessMode.USER_RO, AccessMode.ADMIN_RO)
-
-    @property
-    def allowed_schema(self) -> str | None:
-        """Get the allowed schema for this access mode.
-
-        Returns:
-            'public' for user modes, None for admin modes (all schemas allowed).
-        """
-        if self.is_user_mode:
-            return "public"
-        return None
+    USER = "user"  # Basic role: only public schema, basic tools (4)
+    FULL = "full"  # Full role: all schemas, all tools (9), extended privileges
 
 
 class TransportConfig(StrEnum):
@@ -64,3 +37,42 @@ class TransportHttpApp(StrEnum):
     HTTP = "http"
     STREAMABLE_HTTP = "streamable-http"
 
+
+class ToolName(StrEnum):
+    """Available tool names."""
+
+    LIST_SCHEMAS = "list_schemas"
+    LIST_OBJECTS = "list_objects"
+    GET_OBJECT_DETAILS = "get_object_details"
+    EXPLAIN_QUERY = "explain_query"
+    EXECUTE_SQL = "execute_sql"
+    ANALYZE_WORKLOAD_INDEXES = "analyze_workload_indexes"
+    ANALYZE_QUERY_INDEXES = "analyze_query_indexes"
+    ANALYZE_DB_HEALTH = "analyze_db_health"
+    GET_TOP_QUERIES = "get_top_queries"
+
+    @classmethod
+    def available_tools(cls) -> list[ToolName]:
+        """Get list of all available tools that can be enabled/disabled."""
+        return [
+            cls.LIST_SCHEMAS,
+            cls.LIST_OBJECTS,
+            cls.GET_OBJECT_DETAILS,
+            cls.EXPLAIN_QUERY,
+            cls.EXECUTE_SQL,
+            cls.ANALYZE_WORKLOAD_INDEXES,
+            cls.ANALYZE_QUERY_INDEXES,
+            cls.ANALYZE_DB_HEALTH,
+            cls.GET_TOP_QUERIES,
+        ]
+
+    @classmethod
+    def admin_tools(cls) -> list[ToolName]:
+        """Get list of admin tools that are only available for FULL role."""
+        return [
+            cls.LIST_SCHEMAS,
+            cls.ANALYZE_WORKLOAD_INDEXES,
+            cls.ANALYZE_QUERY_INDEXES,
+            cls.ANALYZE_DB_HEALTH,
+            cls.GET_TOP_QUERIES,
+        ]

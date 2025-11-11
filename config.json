@@ -7,25 +7,29 @@
         "app1": {
             "database_uri": "postgresql://postgres:postgres@localhost:5432/db1",
             "transport": "http",
-            "access_mode": "user_ro",
+            "role": "user",
+            "access_mode": "restricted",
             "endpoint": true
         },
         "app2": {
             "database_uri": "postgresql://postgres:postgres@localhost:5432/db2",
             "transport": "http",
-            "access_mode": "user_rw",
+            "role": "user",
+            "access_mode": "unrestricted",
             "endpoint": true
         },
         "app3": {
             "database_uri": "postgresql://postgres:postgres@localhost:5432/db3",
             "transport": "http",
-            "access_mode": "admin_ro",
+            "role": "full",
+            "access_mode": "restricted",
             "endpoint": true
         },
         "app4": {
             "database_uri": "postgresql://postgres:postgres@localhost:5432/db4",
             "transport": "http",
-            "access_mode": "admin_rw",
+            "role": "full",
+            "access_mode": "unrestricted",
             "endpoint": true
         }
     },

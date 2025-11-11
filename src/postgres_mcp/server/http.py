@@ -97,20 +97,28 @@ class HttpServerBuilder(BaseServerBuilder):
             # Always use prefix for tools in separate endpoints
             tools.register_tools(sub_mcp, prefix=server_name)
 
-            # Use transport setting from this specific server
-            server_transport = server_config.transport
-            server_transport_type = (
+            # Use transport setting from this specific database server
+            # If not specified, use global transport (default: "http")
+            database_server_transport = server_config.transport
+            if database_server_transport is None:
+                # Use global transport (always "http" for HTTP mode)
+                database_server_transport = TransportHttpApp.HTTP.value
+                transport_source = "global (default)"
+            else:
+                transport_source = "explicit"
+
+            database_server_transport_type = (
                 TransportHttpApp.STREAMABLE_HTTP
-                if server_transport == TransportHttpApp.STREAMABLE_HTTP.value
+                if database_server_transport == TransportHttpApp.STREAMABLE_HTTP.value
                 else TransportHttpApp.HTTP
             )
-            is_streamable = server_transport == TransportHttpApp.STREAMABLE_HTTP.value
+            is_streamable = database_server_transport == TransportHttpApp.STREAMABLE_HTTP.value
 
             # Create ASGI app for this server
             # For non-streamable, use stateless_http=True to avoid session management
             sub_app = sub_mcp.http_app(
                 path="/mcp",
-                transport=server_transport_type.value,
+                transport=database_server_transport_type.value,
                 stateless_http=not is_streamable,
             )
             sub_apps.append((server_name, sub_app))
@@ -118,10 +126,11 @@ class HttpServerBuilder(BaseServerBuilder):
             # Mount as separate endpoint (BEFORE main endpoint to avoid route conflicts)
             routes.append(Mount(f"/{server_name}", app=sub_app))
             logger.info(
-                "Separate endpoint /%s/mcp created for server: %s (transport: %s)",
+                "Separate endpoint /%s/mcp created for server: %s (transport: %s, source: %s)",
                 server_name,
                 server_name,
-                server_transport_type.value,
+                database_server_transport_type.value,
+                transport_source,
             )
 
         # Register servers with endpoint=False in main endpoint

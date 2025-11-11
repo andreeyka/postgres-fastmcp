@@ -16,6 +16,7 @@ def configure_logging(
     show_path: bool = True,
     rich_tracebacks: bool = True,
     tracebacks_max_frames: int = 3,
+    disable: bool = False,
 ) -> None:
     """Configure logging with Rich.
 
@@ -25,6 +26,7 @@ def configure_logging(
         show_path: Show file path in logs.
         rich_tracebacks: Enable rich tracebacks.
         tracebacks_max_frames: Maximum number of frames in traceback.
+        disable: If True, disable all logging (useful for stdio mode to avoid interfering with MCP protocol).
     """
     # Get root logger
     root_logger = logging.getLogger()
@@ -32,6 +34,12 @@ def configure_logging(
 
     # Remove all existing handlers
     root_logger.handlers.clear()
+
+    if disable:
+        # For stdio mode: completely disable logging to avoid interfering with MCP protocol
+        # Use NullHandler to suppress all log output
+        root_logger.addHandler(logging.NullHandler())
+        return
 
     # Create console for output
     console = Console(stderr=True)

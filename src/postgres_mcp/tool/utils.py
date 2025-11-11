@@ -6,20 +6,20 @@ from typing import Any
 
 
 def decode_bytes_to_utf8(obj: Any) -> Any:  # noqa: ANN401
-    """Рекурсивно декодирует байты в UTF-8 строки для сериализации в JSON.
+    """Recursively decode bytes to UTF-8 strings for JSON serialization.
 
     Args:
-        obj: Объект, который может содержать байты (dict, list, bytes, str, и т.д.)
+        obj: Object that may contain bytes (dict, list, bytes, str, etc.)
 
     Returns:
-        Объект с декодированными байтами в UTF-8 строки.
-        Тип возвращаемого значения может быть любым JSON-сериализуемым типом.
+        Object with decoded bytes as UTF-8 strings.
+        Return type can be any JSON-serializable type.
     """
     if isinstance(obj, bytes):
         try:
             return obj.decode("utf-8")
         except UnicodeDecodeError:
-            # Если не удается декодировать как UTF-8, пробуем latin-1 (который всегда работает)
+            # If UTF-8 decoding fails, try latin-1 (which always works)
             return obj.decode("latin-1")
     if isinstance(obj, dict):
         return {key: decode_bytes_to_utf8(value) for key, value in obj.items()}
