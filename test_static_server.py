@@ -37,7 +37,7 @@ from postgres_mcp.tool.tools import ToolManager
 # - ADMIN_RO: все инструменты (9 шт: все базовые + admin инструменты)
 # - ADMIN_RW: все инструменты + неограниченный execute_sql (9 шт)
 #
-# tool_name_prefix=True (по умолчанию) добавляет префикс к именам инструментов:
+# Префикс к именам инструментов добавляется автоматически на основе имени сервера:
 # - app1: app1_list_objects, app1_get_object_details, app1_execute_sql, app1_explain_query
 # - app2: app2_list_objects, app2_get_object_details, app2_execute_sql, app2_explain_query
 # - app3: app3_list_schemas, app3_list_objects, app3_execute_sql, ... (все 9 инструментов)
@@ -46,22 +46,18 @@ SUB_SERVERS_CONFIG = {
     "app1": DatabaseConfig(
         database_uri=SecretStr("postgresql://postgres:postgres@localhost:5432/db1"),
         access_mode="user_ro",  # Только базовые инструменты (4 шт)
-        tool_name_prefix=True,  # Инструменты будут: app1_list_objects, app1_execute_sql, и т.д.
     ),
     "app2": DatabaseConfig(
         database_uri=SecretStr("postgresql://postgres:postgres@localhost:5432/db2"),
         access_mode="user_rw",  # Базовые инструменты + запись (4 шт)
-        tool_name_prefix=True,  # Инструменты будут: app2_list_objects, app2_execute_sql, и т.д.
     ),
     "app3": DatabaseConfig(
         database_uri=SecretStr("postgresql://postgres:postgres@localhost:5432/db3"),
         access_mode="admin_ro",  # Все инструменты (9 шт)
-        tool_name_prefix=True,  # Инструменты будут: app3_list_schemas, app3_list_objects, и т.д.
     ),
     "app4": DatabaseConfig(
         database_uri=SecretStr("postgresql://postgres:postgres@localhost:5432/db4"),
         access_mode="admin_rw",  # Все инструменты + неограниченный execute_sql (9 шт)
-        tool_name_prefix=True,  # Инструменты будут: app4_list_schemas, app4_list_objects, и т.д.
     ),
 }
 

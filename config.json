@@ -4,16 +4,29 @@
     "endpoint": "mcp",
     "transport": "http",
     "databases": {
-        "admin_rw_db": {
-            "database_uri": "postgresql://postgres:postgres@postgres:5432/admin_rw_db",
-            "streamable": false,
-            "access_mode": "admin_rw"
-        },
-        "user_db": {
-            "database_uri": "postgresql://postgres:postgres@postgres:5432/user_db",
-            "streamable": false,
+        "app1": {
+            "database_uri": "postgresql://postgres:postgres@localhost:5432/db1",
+            "transport": "http",
             "access_mode": "user_ro",
-            "table_prefix": "app_"
+            "endpoint": true
+        },
+        "app2": {
+            "database_uri": "postgresql://postgres:postgres@localhost:5432/db2",
+            "transport": "http",
+            "access_mode": "user_rw",
+            "endpoint": true
+        },
+        "app3": {
+            "database_uri": "postgresql://postgres:postgres@localhost:5432/db3",
+            "transport": "http",
+            "access_mode": "admin_ro",
+            "endpoint": true
+        },
+        "app4": {
+            "database_uri": "postgresql://postgres:postgres@localhost:5432/db4",
+            "transport": "http",
+            "access_mode": "admin_rw",
+            "endpoint": true
         }
     },
     "host": "0.0.0.0",

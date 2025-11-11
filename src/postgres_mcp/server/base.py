@@ -39,6 +39,9 @@ class BaseServerBuilder(ABC):
     def register_tool_mode_servers(self, transport_type: TransportConfig) -> list[str]:
         """Register tool mode servers on the main FastMCP server.
 
+        Only registers servers with endpoint=False (mounted in main endpoint via Server Composition).
+        Servers with endpoint=True are handled separately as individual HTTP endpoints.
+
         - Single server: tools are registered directly on main_mcp (no prefix)
         - Multiple servers: each server is mounted with its name as prefix (Server Composition)
 
@@ -53,8 +56,12 @@ class BaseServerBuilder(ABC):
         """
         mounted_servers: list[str] = []
 
-        # All servers are in tool mode (endpoint mode removed)
-        tool_mode_servers = self.config.tool_mode_servers
+        # Filter servers with endpoint=False (mounted in main endpoint)
+        tool_mode_servers = {
+            name: config
+            for name, config in self.config.tool_mode_servers.items()
+            if not config.endpoint
+        }
         is_single_server = len(tool_mode_servers) == 1
 
         for server_name in tool_mode_servers:

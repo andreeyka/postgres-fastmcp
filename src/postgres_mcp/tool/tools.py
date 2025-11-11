@@ -759,10 +759,9 @@ class ToolManager:
         Args:
             mcp: FastMCP server instance to register tools with.
             prefix: Optional prefix for the database server. If provided, adds prefix
-                information to tool descriptions to indicate which database the tool
-                belongs to and that tools with the same prefix should be used together.
-                If tool_name_prefix is True in config, also adds prefix to tool names
-                (e.g., 'list_schemas' becomes 'app1_list_schemas').
+                to tool names (e.g., 'list_schemas' becomes 'app1_list_schemas') and
+                adds prefix information to tool descriptions to indicate which database
+                the tool belongs to and that tools with the same prefix should be used together.
 
         Returns:
             Number of registered tools.
@@ -776,9 +775,9 @@ class ToolManager:
             method = getattr(self, method_name)
             base_description = tool_config["description"]
 
-            # Determine tool name: add prefix if enabled and prefix is provided
+            # Determine tool name: add prefix if provided
             tool_name: str | None = None
-            if prefix and self.config.tool_name_prefix:
+            if prefix:
                 tool_name = f"{prefix}_{method_name}"
 
             # Add prefix information to description if prefix is provided

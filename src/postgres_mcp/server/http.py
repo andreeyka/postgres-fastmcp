@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
 from functools import cached_property
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import uvicorn
+from fastmcp import FastMCP
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
@@ -25,8 +28,11 @@ logger = get_logger(__name__)
 class HttpServerBuilder(BaseServerBuilder):
     """HTTP server builder for FastMCP.
 
-    Simplified version: all servers are mounted into main_mcp with prefixes (Server Composition).
-    All tools are available through a single endpoint with prefixes (native FastMCP behavior).
+    Supports two mounting modes:
+    - Servers with endpoint=False: mounted in main endpoint via FastMCP mount() (Server Composition)
+    - Servers with endpoint=True: mounted as separate HTTP endpoints at /{server_name}/mcp
+
+    Tools are automatically prefixed with server name to prevent conflicts.
     """
 
     def __init__(self, config: Settings) -> None:
@@ -39,53 +45,146 @@ class HttpServerBuilder(BaseServerBuilder):
 
     @cached_property
     def _mounted_server_names(self) -> list[str]:
-        """List of server names after mounting.
+        """List of server names after mounting in main endpoint.
 
-        - Single server: tools registered directly on main_mcp (no prefix)
-        - Multiple servers: each server mounted with prefix (Server Composition)
+        Only includes servers with endpoint=False (mounted via Server Composition).
+        Servers with endpoint=True are handled separately as individual HTTP endpoints.
 
         Returns:
-            List of server names that were mounted.
+            List of server names that were mounted in main endpoint.
         """
         return self.register_tool_mode_servers(transport_type=TransportConfig.HTTP)
 
     def build(self) -> Starlette:
         """Build and configure HTTP application.
 
-        - Single server: tools available directly at /{endpoint}
-        - Multiple servers: tools available at /{endpoint} with server name prefixes
+        Supports two modes:
+        - Servers with endpoint=False: mounted in main endpoint via FastMCP mount() (Server Composition)
+        - Servers with endpoint=True: mounted as separate HTTP endpoints at /{server_name}/mcp
 
         Returns:
             Configured Starlette application ready to run.
         """
-        # All servers are mounted into main_mcp with prefixes
-        # Property will be called automatically on first access
-        servers_list = ", ".join(self._mounted_server_names)
+        # Separate servers into two groups
+        main_endpoint_servers = {
+            name: config
+            for name, config in self.config.databases.items()
+            if not config.endpoint
+        }
+        separate_endpoint_servers = {
+            name: config
+            for name, config in self.config.databases.items()
+            if config.endpoint
+        }
+
         streamable = self.config.tool_mode_streamable
         transport_type = TransportHttpApp.STREAMABLE_HTTP if streamable else TransportHttpApp.HTTP
 
-        is_single = len(self._mounted_server_names) == 1
-        prefix_info = "no prefix" if is_single else "with prefixes"
-        logger.info(
-            "Endpoint /%s created for servers: %s (transport: %s, %s)",
-            self.config.endpoint,
-            servers_list,
-            transport_type.value,
-            prefix_info,
-        )
+        routes: list[Mount] = []
+        sub_apps: list[tuple[str, Starlette]] = []
 
-        # Create a single ASGI app from main_mcp
-        # Single server: tools at /{endpoint} directly
-        # Multiple servers: tools at /{endpoint} with server name prefixes
-        transport = TransportHttpApp.STREAMABLE_HTTP if streamable else TransportHttpApp.HTTP
-        mcp_app = self.main_mcp.http_app(path=f"/{self.config.endpoint}", transport=transport.value)
+        # Create separate endpoints for servers with endpoint=True
+        # IMPORTANT: These must be mounted BEFORE the main endpoint (Mount("/", ...))
+        # to avoid the main endpoint catching all requests
+        for server_name, server_config in separate_endpoint_servers.items():
+            tools = self.lifespan_manager.get_tools(server_name)
+            if tools is None:
+                error_msg = f"ToolManager instance not found for server {server_name}"
+                raise RuntimeError(error_msg)
 
-        # Create simple Starlette application with one endpoint
-        # Use lifespan from mcp_app (as per FastMCP documentation)
-        return Starlette(
-            routes=[Mount("/", app=mcp_app)],
-            lifespan=mcp_app.lifespan,
-        )
+            # Create separate FastMCP server for this endpoint
+            sub_mcp = FastMCP(name=server_name)
+            # Always use prefix for tools in separate endpoints
+            tools.register_tools(sub_mcp, prefix=server_name)
+
+            # Use transport setting from this specific server
+            server_transport = server_config.transport
+            server_transport_type = (
+                TransportHttpApp.STREAMABLE_HTTP
+                if server_transport == TransportHttpApp.STREAMABLE_HTTP.value
+                else TransportHttpApp.HTTP
+            )
+            is_streamable = server_transport == TransportHttpApp.STREAMABLE_HTTP.value
+
+            # Create ASGI app for this server
+            # For non-streamable, use stateless_http=True to avoid session management
+            sub_app = sub_mcp.http_app(
+                path="/mcp",
+                transport=server_transport_type.value,
+                stateless_http=not is_streamable,
+            )
+            sub_apps.append((server_name, sub_app))
+
+            # Mount as separate endpoint (BEFORE main endpoint to avoid route conflicts)
+            routes.append(Mount(f"/{server_name}", app=sub_app))
+            logger.info(
+                "Separate endpoint /%s/mcp created for server: %s (transport: %s)",
+                server_name,
+                server_name,
+                server_transport_type.value,
+            )
+
+        # Register servers with endpoint=False in main endpoint
+        # This must be mounted AFTER separate endpoints to avoid route conflicts
+        if main_endpoint_servers:
+            servers_list = ", ".join(self._mounted_server_names)
+            is_single = len(main_endpoint_servers) == 1
+            prefix_info = "no prefix" if is_single else "with prefixes"
+            logger.info(
+                "Main endpoint /%s created for servers: %s (transport: %s, %s)",
+                self.config.endpoint,
+                servers_list,
+                transport_type.value,
+                prefix_info,
+            )
+
+            # Create ASGI app from main_mcp for servers with endpoint=False
+            main_app = self.main_mcp.http_app(
+                path=f"/{self.config.endpoint}", transport=transport_type.value
+            )
+            routes.append(Mount("/", app=main_app))
+        else:
+            # No main endpoint servers, but we still need a main_app for lifespan
+            main_app = self.main_mcp.http_app(
+                path=f"/{self.config.endpoint}", transport=transport_type.value
+            )
+            routes.append(Mount("/", app=main_app))
+
+        # Create combined lifespan for all applications
+        @asynccontextmanager
+        async def combined_lifespan(_app: Starlette) -> AsyncIterator[dict[str, Any]]:
+            """Combined lifespan for all FastMCP applications and ToolManager."""
+            async with AsyncExitStack() as stack:
+                # Enter context of all ToolManager instances
+                for tools_instance in self.lifespan_manager.tools_instances.values():
+                    await stack.enter_async_context(tools_instance)
+
+                # Initialize database connections
+                logger.info("Initializing database connections...")
+                for server_name, tools_instance in self.lifespan_manager.tools_instances.items():
+                    try:
+                        await tools_instance.db_connection.pool_connect()
+                        logger.info("Successfully connected to database for server: %s", server_name)
+                    except Exception as e:
+                        logger.warning(
+                            "Could not connect to database for server '%s': %s",
+                            server_name,
+                            str(e),
+                        )
+
+                # Enter lifespan of all sub applications
+                for server_name, sub_app in sub_apps:
+                    if hasattr(sub_app, "lifespan") and sub_app.lifespan:
+                        await stack.enter_async_context(sub_app.lifespan(_app))
+
+                # Enter lifespan of main application
+                if hasattr(main_app, "lifespan") and main_app.lifespan:
+                    await stack.enter_async_context(main_app.lifespan(_app))
+
+                yield {}
+
+        # Create Starlette application with all routes
+        return Starlette(routes=routes, lifespan=combined_lifespan)
 
     async def run(self) -> None:
         """Run HTTP server.
@@ -117,8 +216,9 @@ class HttpServerBuilder(BaseServerBuilder):
 async def run_http(config: Settings | None = None) -> None:
     """Run server in HTTP mode with lifecycle management via FastMCP lifespan.
 
-    - Single server: tools available directly at /{endpoint}
-    - Multiple servers: tools available at /{endpoint} with server name prefixes
+    Supports two mounting modes:
+    - Servers with endpoint=False: tools available at /{endpoint} (with prefixes for multiple servers)
+    - Servers with endpoint=True: tools available at /{server_name}/mcp (always with prefixes)
 
     Args:
         config: Application configuration. If not provided, uses global settings.

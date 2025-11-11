@@ -85,48 +85,46 @@ SUB_SERVERS_CONFIG = {
     "app1": DatabaseConfig(
         database_uri=SecretStr("postgresql://...@localhost:5432/db1"),
         access_mode="user_ro",  # Только базовые инструменты (4 шт)
-        tool_name_prefix=True,  # Инструменты: app1_list_objects, app1_execute_sql, и т.д.
+        endpoint=True,  # Монтируется как отдельный endpoint /app1/mcp
     ),
     "app2": DatabaseConfig(
         database_uri=SecretStr("postgresql://...@localhost:5432/db2"),
         access_mode="user_rw",  # Базовые инструменты + запись (4 шт)
-        tool_name_prefix=True,  # Инструменты: app2_list_objects, app2_execute_sql, и т.д.
+        endpoint=True,  # Монтируется как отдельный endpoint /app2/mcp
     ),
     "app3": DatabaseConfig(
         database_uri=SecretStr("postgresql://...@localhost:5432/db3"),
         access_mode="admin_ro",  # Все инструменты (9 шт)
-        tool_name_prefix=True,  # Инструменты: app3_list_schemas, app3_list_objects, и т.д.
+        endpoint=True,  # Монтируется как отдельный endpoint /app3/mcp
     ),
     "app4": DatabaseConfig(
         database_uri=SecretStr("postgresql://...@localhost:5432/db4"),
         access_mode="admin_rw",  # Все инструменты + неограниченный execute_sql (9 шт)
-        tool_name_prefix=True,  # Инструменты: app4_list_schemas, app4_list_objects, и т.д.
+        endpoint=True,  # Монтируется как отдельный endpoint /app4/mcp
     ),
 }
 ```
 
-**Параметр `tool_name_prefix`:**
-- `True` (по умолчанию): Добавляет префикс к именам инструментов (например, `app1_list_objects`)
-- `False`: Инструменты сохраняют оригинальные имена (например, `list_objects`)
+**Параметр `endpoint`:**
+- `True`: Сервер монтируется как отдельный HTTP endpoint по пути `/{server_name}/mcp`
+- `False` (по умолчанию): Сервер монтируется в основной endpoint через FastMCP mount() (Server Composition)
 
-**Рекомендация:** Используйте `tool_name_prefix=True` при подключении нескольких серверов к одному агенту, чтобы избежать конфликтов имен инструментов.
+**Префиксы инструментов:**
+Префикс к именам инструментов добавляется автоматически на основе имени сервера. Это предотвращает конфликты имен, когда несколько MCP серверов подключены к одному агенту.
 
 ## Режимы доступа и наборы инструментов
 
 ### Префиксы к именам инструментов
 
-По умолчанию (`tool_name_prefix=True`) к именам инструментов добавляется префикс на основе имени сервера из конфигурации. Это предотвращает конфликты имен, когда несколько MCP серверов подключены к одному агенту.
+К именам инструментов автоматически добавляется префикс на основе имени сервера из конфигурации. Это предотвращает конфликты имен, когда несколько MCP серверов подключены к одному агенту.
 
 **Пример:**
 - Сервер `app1` с инструментом `list_objects` → имя инструмента: `app1_list_objects`
 - Сервер `app2` с инструментом `list_objects` → имя инструмента: `app2_list_objects`
 
-**Отключение префиксов:**
-Установите `tool_name_prefix=False` в конфигурации, если хотите использовать оригинальные имена инструментов (не рекомендуется при подключении нескольких серверов к одному агенту).
-
 ### USER_RO / USER_RW (4 инструмента)
 
-**С префиксом (tool_name_prefix=True):**
+**Инструменты с префиксом:**
 - `{prefix}_list_objects` - список объектов в схеме public
 - `{prefix}_get_object_details` - детали объекта
 - `{prefix}_explain_query` - план выполнения запроса
@@ -141,7 +139,7 @@ SUB_SERVERS_CONFIG = {
 
 ### ADMIN_RO / ADMIN_RW (9 инструментов)
 
-**С префиксом (tool_name_prefix=True):**
+**Инструменты с префиксом:**
 - Все базовые инструменты (4 шт) с префиксом
 - `{prefix}_list_schemas` - список всех схем
 - `{prefix}_analyze_workload_indexes` - анализ индексов по workload
@@ -163,14 +161,17 @@ SUB_SERVERS_CONFIG = {
 
 2. **Регистрация tools на FastMCP серверах**
    - Tools регистрируются через `tool_manager.register_tools(sub_mcp, prefix=app_name)`
-   - Каждый tool получает префикс для идентификации БД
+   - Каждый tool автоматически получает префикс для идентификации БД
+   - Для серверов с `endpoint=True` создаются отдельные FastMCP серверы
+   - Для серверов с `endpoint=False` tools регистрируются в основном сервере
 
 3. **Создание HTTP приложений**
    - Каждый FastMCP сервер преобразуется в Starlette приложение через `http_app(path="/mcp")`
    - Главный сервер также преобразуется в Starlette приложение
 
 4. **Монтирование через Starlette Mount**
-   - Каждый подчиненный сервер монтируется на свой путь: `Mount(f"/{app_name}", app=sub_app)`
+   - Серверы с `endpoint=True` монтируются как отдельные endpoints: `Mount(f"/{app_name}", app=sub_app)`
+   - Серверы с `endpoint=False` монтируются в основной endpoint через FastMCP mount() (Server Composition)
    - Главный сервер монтируется на корневой путь: `Mount("/", app=main_app)`
 
 5. **Инициализация подключений к БД**
@@ -193,11 +194,11 @@ SUB_SERVERS_CONFIG = {
 - Свой набор tools
 - Свой HTTP endpoint
 
-### 2. Использование Starlette Mount
+### 2. Использование Starlette Mount и FastMCP mount()
 
-**Важно:** Для разных HTTP endpoints используется Starlette `Mount`, а не FastMCP `mount()`:
-- FastMCP `mount()` - для Server Composition (префиксы tools/resources/prompts в одном endpoint)
-- Starlette `Mount` - для разных HTTP endpoints (разные пути)
+**Важно:** 
+- FastMCP `mount()` - для Server Composition (серверы с `endpoint=False`, префиксы tools/resources/prompts в одном endpoint)
+- Starlette `Mount` - для разных HTTP endpoints (серверы с `endpoint=True`, разные пути)
 
 ### 3. Управление жизненным циклом
 

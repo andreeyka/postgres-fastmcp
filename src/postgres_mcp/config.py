@@ -10,7 +10,7 @@ from typing import Any
 from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from postgres_mcp.enums import AccessMode, TransportConfig
+from postgres_mcp.enums import AccessMode, TransportConfig, TransportHttpApp
 
 
 class DatabaseConfig(BaseModel):
@@ -20,15 +20,16 @@ class DatabaseConfig(BaseModel):
     endpoint: bool = Field(
         default=False,
         description=(
-            "DEPRECATED: Endpoint mode removed. All servers are mounted with prefixes. "
-            "This parameter is ignored and kept for backward compatibility."
+            "If True, server is mounted as a separate HTTP endpoint at path `/{server_name}/mcp`. "
+            "If False, server is mounted in the main endpoint via FastMCP mount() (Server Composition)."
         ),
     )
-    streamable: bool = Field(
-        default=False,
+    transport: str = Field(
+        default="http",
         description=(
-            "Use streamable-http transport for this server (only for HTTP transport). "
-            "All servers must have the same streamable value."
+            "HTTP transport type for this server: 'http' or 'streamable-http'. "
+            "Only used when main transport is 'http'. "
+            "Default: 'http'."
         ),
     )
     extra_kwargs: dict[str, str] = Field(default_factory=dict, description="Extra keyword arguments")
@@ -55,15 +56,6 @@ class DatabaseConfig(BaseModel):
             "If set, only tables/views/sequences with names starting with this prefix are accessible. "
             "Works only for USER_RO and USER_RW access modes. "
             "Ignored for admin modes."
-        ),
-    )
-    tool_name_prefix: bool = Field(
-        default=True,
-        description=(
-            "If True, adds prefix to tool names based on database server name. "
-            "This prevents tool name conflicts when multiple MCP servers are connected to the same agent. "
-            "For example, if server name is 'app1', tool 'list_schemas' becomes 'app1_list_schemas'. "
-            "If False, tools keep their original names."
         ),
     )
 
@@ -104,27 +96,24 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_transport_and_streamable(self) -> Settings:
-        """Validate transport and streamable compatibility for all servers.
+        """Validate transport compatibility for all servers.
 
         Rules:
-        - If transport='stdio', streamable parameter is ignored
-        - If transport='http', all servers should have the same streamable value
+        - If transport='stdio', server transport parameter is ignored
+        - If transport='http', server transport must be 'http' or 'streamable-http'
         """
-        # If transport='http', check that all servers have the same streamable value
-        # If values differ, issue a warning and set streamable=False for all
+        # Validate server transport values
         if self.transport == TransportConfig.HTTP and self.databases:
-            first_streamable = next(iter(self.databases.values())).streamable
-            has_different_values = any(server.streamable != first_streamable for server in self.databases.values())
-
-            if has_different_values:
-                warnings.warn(
-                    "Servers have different streamable values. All servers will use streamable=False.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-                # Set streamable=False for all servers
-                for server in self.databases.values():
-                    server.streamable = False
+            valid_transports = {TransportHttpApp.HTTP.value, TransportHttpApp.STREAMABLE_HTTP.value}
+            for server_name, server_config in self.databases.items():
+                if server_config.transport not in valid_transports:
+                    warnings.warn(
+                        f"Server '{server_name}' has invalid transport '{server_config.transport}'. "
+                        f"Must be 'http' or 'streamable-http'. Using 'http' as default.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    server_config.transport = TransportHttpApp.HTTP.value
 
         return self
 
@@ -149,16 +138,20 @@ class Settings(BaseSettings):
 
     @property
     def tool_mode_streamable(self) -> bool:
-        """Get streamable value for all servers.
+        """Get streamable value for main endpoint servers.
 
         Returns:
-            Streamable value for servers.
-            All servers have the same streamable value (validated).
-            Returns False if there are no servers.
+            True if main endpoint servers use streamable-http, False otherwise.
+            Returns False if there are no servers or if transport is stdio.
         """
-        if not self.databases:
+        if not self.databases or self.transport == TransportConfig.STDIO:
             return False
-        return next(iter(self.databases.values())).streamable
+        # Check servers with endpoint=False (mounted in main endpoint)
+        main_endpoint_servers = [s for s in self.databases.values() if not s.endpoint]
+        if not main_endpoint_servers:
+            return False
+        # Use first server's transport (all should be the same for main endpoint)
+        return main_endpoint_servers[0].transport == TransportHttpApp.STREAMABLE_HTTP.value
 
     @property
     def server_names(self) -> list[str]:

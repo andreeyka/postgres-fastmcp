@@ -103,12 +103,12 @@ Create a `config.json` file:
         "production": {
             "database_uri": "postgresql://user:password@localhost:5432/production",
             "access_mode": "admin_ro",
-            "streamable": false
+            "transport": "http"
         },
         "development": {
             "database_uri": "postgresql://user:password@localhost:5432/development",
             "access_mode": "admin_rw",
-            "streamable": false
+            "transport": "http"
         }
     }
 }
@@ -147,7 +147,7 @@ The server will be available at `http://localhost:8000/mcp` (or at the specified
 
 #### Streamable-HTTP Transport
 
-Streamable-HTTP provides streaming data transfer:
+Streamable-HTTP provides streaming data transfer. To use it, set `transport: "streamable-http"` for each server:
 
 ```json
 {
@@ -155,11 +155,17 @@ Streamable-HTTP provides streaming data transfer:
     "databases": {
         "db1": {
             "database_uri": "postgresql://...",
-            "streamable": true
+            "transport": "streamable-http"
+        },
+        "db2": {
+            "database_uri": "postgresql://...",
+            "transport": "http"
         }
     }
 }
 ```
+
+Each server can have its own transport type (`"http"` or `"streamable-http"`).
 
 #### STDIO Transport
 

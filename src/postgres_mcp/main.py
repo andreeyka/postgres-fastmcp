@@ -45,10 +45,10 @@ logger = get_logger(__name__)
     help="Mount the server as an endpoint (only for HTTP transport)",
 )
 @click.option(
-    "--streamable",
-    is_flag=True,
-    default=False,
-    help="Use streamable-http transport (only for HTTP transport)",
+    "--server-transport",
+    type=click.Choice(["http", "streamable-http"], case_sensitive=False),
+    default="http",
+    help="HTTP transport type for the server: 'http' or 'streamable-http' (only for HTTP transport)",
 )
 @click.option(
     "--transport",
@@ -65,7 +65,7 @@ def main(  # noqa: PLR0913
     database_uri: str | None = None,
     server_name: str = "default",
     endpoint: bool = False,
-    streamable: bool = False,
+    server_transport: str = "http",
     transport: str = "http",
     host: str = "127.0.0.1",
     port: int = 8000,
@@ -88,7 +88,7 @@ def main(  # noqa: PLR0913
         database_config = DatabaseConfig(
             database_uri=SecretStr(database_uri),
             endpoint=endpoint,
-            streamable=streamable,
+            transport=server_transport,
         )
         # Always use Server Composition with prefixes (default behavior)
         app_settings = get_settings(
