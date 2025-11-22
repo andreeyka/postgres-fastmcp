@@ -4,10 +4,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytest_asyncio
 
-import postgres_mcp.top_queries.top_queries_calc as top_queries_module
-from postgres_mcp.sql import SqlDriver
-from postgres_mcp.sql.extension_utils import ExtensionStatus
-from postgres_mcp.top_queries import TopQueriesCalc
+import postgres_fastmcp.top_queries.top_queries_calc as top_queries_module
+from postgres_fastmcp.sql import SqlDriver
+from postgres_fastmcp.sql.extension_utils import ExtensionStatus
+from postgres_fastmcp.top_queries import TopQueriesCalc
 
 
 class MockSqlRowResult:

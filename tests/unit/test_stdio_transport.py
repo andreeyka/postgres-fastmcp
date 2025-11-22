@@ -8,9 +8,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from postgres_mcp.config import get_settings
-from postgres_mcp.enums import TransportConfig
-from postgres_mcp.models import DatabaseConfig
+from postgres_fastmcp.config import get_settings
+from postgres_fastmcp.enums import TransportConfig
+from postgres_fastmcp.config import DatabaseConfig
 from pydantic import SecretStr
 
 
@@ -20,7 +20,7 @@ class TestStdioTransport:
     def test_transport_stdio_via_cli(self):
         """Test that transport='stdio' via CLI sets stdio mode correctly."""
         settings = get_settings(
-            transport="stdio",
+            server={"transport": "stdio"},
             databases={"test": DatabaseConfig(database_uri=SecretStr("postgresql://test"))},
         )
 
@@ -30,7 +30,7 @@ class TestStdioTransport:
     def test_transport_http_via_cli(self):
         """Test that transport='http' via CLI sets http mode correctly."""
         settings = get_settings(
-            transport="http",
+            server={"transport": "http"},
             databases={"test": DatabaseConfig(database_uri=SecretStr("postgresql://test"))},
         )
 
@@ -48,14 +48,14 @@ class TestStdioTransport:
 
     def test_main_calls_run_stdio_when_transport_stdio(self):
         """Test that main() calls run_stdio when --transport stdio is specified."""
-        from postgres_mcp.main import main
+        from postgres_fastmcp.main import main
 
         original_argv = sys.argv
         original_run = asyncio.run
 
         try:
             sys.argv = [
-                "postgres_mcp",
+                "postgres_fastmcp",
                 "--database-uri",
                 "postgresql://user:pass@localhost/db",
                 "--transport",
@@ -64,8 +64,8 @@ class TestStdioTransport:
             asyncio.run = MagicMock()
 
             with (
-                patch("postgres_mcp.main.run_stdio", MagicMock()) as mock_stdio,
-                patch("postgres_mcp.main.run_http", MagicMock()) as mock_http,
+                patch("postgres_fastmcp.main.run_stdio", MagicMock()) as mock_stdio,
+                patch("postgres_fastmcp.main.run_http", MagicMock()) as mock_http,
             ):
                 try:
                     main()
@@ -82,14 +82,14 @@ class TestStdioTransport:
 
     def test_main_calls_run_http_when_transport_http(self):
         """Test that main() calls run_http when --transport http is specified."""
-        from postgres_mcp.main import main
+        from postgres_fastmcp.main import main
 
         original_argv = sys.argv
         original_run = asyncio.run
 
         try:
             sys.argv = [
-                "postgres_mcp",
+                "postgres_fastmcp",
                 "--database-uri",
                 "postgresql://user:pass@localhost/db",
                 "--transport",
@@ -98,8 +98,8 @@ class TestStdioTransport:
             asyncio.run = MagicMock()
 
             with (
-                patch("postgres_mcp.main.run_stdio", MagicMock()) as mock_stdio,
-                patch("postgres_mcp.main.run_http", MagicMock()) as mock_http,
+                patch("postgres_fastmcp.main.run_stdio", MagicMock()) as mock_stdio,
+                patch("postgres_fastmcp.main.run_http", MagicMock()) as mock_http,
             ):
                 try:
                     main()
@@ -116,14 +116,14 @@ class TestStdioTransport:
 
     def test_main_calls_run_http_when_transport_not_specified(self):
         """Test that main() calls run_http when --transport is not specified (default)."""
-        from postgres_mcp.main import main
+        from postgres_fastmcp.main import main
 
         original_argv = sys.argv
         original_run = asyncio.run
 
         try:
             sys.argv = [
-                "postgres_mcp",
+                "postgres_fastmcp",
                 "--database-uri",
                 "postgresql://user:pass@localhost/db",
                 # No --transport specified
@@ -131,8 +131,8 @@ class TestStdioTransport:
             asyncio.run = MagicMock()
 
             with (
-                patch("postgres_mcp.main.run_stdio", MagicMock()) as mock_stdio,
-                patch("postgres_mcp.main.run_http", MagicMock()) as mock_http,
+                patch("postgres_fastmcp.main.run_stdio", MagicMock()) as mock_stdio,
+                patch("postgres_fastmcp.main.run_http", MagicMock()) as mock_http,
             ):
                 try:
                     main()

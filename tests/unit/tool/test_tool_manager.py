@@ -7,9 +7,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import SecretStr
 
-from postgres_mcp.config import ADMIN_TOOLS, AVAILABLE_TOOLS, DatabaseConfig, ToolsConfig
-from postgres_mcp.enums import AccessMode, ToolName, UserRole
-from postgres_mcp.tool.descriptions import (
+from postgres_fastmcp.config import DatabaseConfig
+from postgres_fastmcp.config.database import ADMIN_TOOLS, AVAILABLE_TOOLS, ToolsConfig
+from postgres_fastmcp.enums import AccessMode, ToolName, UserRole
+from postgres_fastmcp.tool.descriptions import (
     DESC_EXECUTE_SQL_RESTRICTED,
     DESC_EXECUTE_SQL_UNRESTRICTED,
     DESC_GET_OBJECT_DETAILS_FULL,
@@ -17,7 +18,7 @@ from postgres_mcp.tool.descriptions import (
     DESC_LIST_OBJECTS_FULL,
     DESC_LIST_OBJECTS_USER,
 )
-from postgres_mcp.tool.tools import ToolManager
+from postgres_fastmcp.tool.tools import ToolManager
 
 
 class TestToolManagerToolCreation:
@@ -26,7 +27,7 @@ class TestToolManagerToolCreation:
     @pytest.fixture
     def mock_db_connection(self):
         """Mock database connection pool."""
-        with patch("postgres_mcp.tool.tools.DbConnPool") as mock_pool:
+        with patch("postgres_fastmcp.tool.tools.DbConnPool") as mock_pool:
             mock_pool_instance = MagicMock()
             mock_pool.return_value = mock_pool_instance
             yield mock_pool_instance

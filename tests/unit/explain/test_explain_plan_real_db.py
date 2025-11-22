@@ -4,9 +4,9 @@ import logging
 
 import pytest
 
-from postgres_mcp.common import ErrorResult
-from postgres_mcp.explain import ExplainPlanArtifact, ExplainPlanTool
-from postgres_mcp.sql import SqlDriver
+from postgres_fastmcp.common import ErrorResult
+from postgres_fastmcp.explain import ExplainPlanArtifact, ExplainPlanTool
+from postgres_fastmcp.sql import SqlDriver
 
 
 logger = logging.getLogger(__name__)

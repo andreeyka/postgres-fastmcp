@@ -5,8 +5,9 @@ from __future__ import annotations
 import pytest
 from pydantic import SecretStr
 
-from postgres_mcp.config import ADMIN_TOOLS, AVAILABLE_TOOLS, DatabaseConfig, ToolsConfig
-from postgres_mcp.enums import AccessMode, ToolName, UserRole
+from postgres_fastmcp.config import DatabaseConfig
+from postgres_fastmcp.config.database import ADMIN_TOOLS, AVAILABLE_TOOLS, ToolsConfig
+from postgres_fastmcp.enums import AccessMode, ToolName, UserRole
 
 
 class TestGetEnabledTools:

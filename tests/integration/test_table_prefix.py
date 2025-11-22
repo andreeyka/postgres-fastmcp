@@ -6,10 +6,10 @@ from __future__ import annotations
 import pytest
 from pydantic import SecretStr
 
-from postgres_mcp.config import DatabaseConfig
-from postgres_mcp.enums import AccessMode, UserRole
-from postgres_mcp.sql import SafeSqlDriver, SqlDriver
-from postgres_mcp.tool import ToolManager
+from postgres_fastmcp.config import DatabaseConfig
+from postgres_fastmcp.enums import AccessMode, UserRole
+from postgres_fastmcp.sql import SafeSqlDriver, SqlDriver
+from postgres_fastmcp.tool import ToolManager
 
 
 async def setup_test_tables(sql_driver: SqlDriver) -> None:

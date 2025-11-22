@@ -3,11 +3,11 @@
 # Postgres MCP Pro (FastMCP Fork)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![PyPI - Version](https://img.shields.io/pypi/v/postgres-mcp)](https://pypi.org/project/postgres-mcp/)
+[![PyPI - Version](https://img.shields.io/pypi/v/postgres-fastmcp)](https://pypi.org/project/postgres-fastmcp/)
 
 <h3>A Postgres MCP server with index tuning, explain plans, health checks, and safe SQL execution. Built on FastMCP.</h3>
 
-<p><em>Fork of <a href="https://github.com/crystaldba/postgres-mcp">postgres-mcp</a> rewritten to use <a href="https://gofastmcp.com/">FastMCP</a> framework</em></p>
+<p><em>Fork of <a href="https://github.com/crystaldba/postgres-fastmcp">postgres-fastmcp</a> rewritten to use <a href="https://gofastmcp.com/">FastMCP</a> framework</em></p>
 
 <div class="toc">
   <a href="#overview">Overview</a> •
@@ -26,7 +26,7 @@
 
 **Postgres MCP Pro** is an open-source MCP (Model Context Protocol) server built on top of [FastMCP](https://gofastmcp.com/) that supports you and your AI agents throughout the entire development process—from initial coding, through testing and deployment, to production tuning and maintenance.
 
-This fork of the original [postgres-mcp](https://github.com/crystaldba/postgres-mcp) project has been rewritten to use FastMCP, providing:
+This fork of the original [postgres-fastmcp](https://github.com/crystaldba/postgres-fastmcp) project has been rewritten to use FastMCP, providing:
 
 - **🚀 Enhanced Performance** — FastMCP is optimized for high performance
 - **🔧 Flexible Configuration** — support for multiple databases simultaneously via `config.json`
@@ -59,8 +59,8 @@ Before getting started, ensure you have:
 # Install uv if not already installed
 curl -sSL https://astral.sh/uv/install.sh | sh
 
-# Install postgres-mcp
-uv pip install postgres-mcp
+# Install postgres-fastmcp
+uv pip install postgres-fastmcp
 ```
 
 #### Install from source
@@ -87,7 +87,7 @@ For quick start with a single database, use CLI parameters:
 
 **HTTP mode:**
 ```bash
-uv run postgres-mcp \
+uv run postgres-fastmcp \
   --database-uri "postgresql://user:password@localhost:5432/dbname" \
   --transport http \
   --port 8000 \
@@ -97,7 +97,7 @@ uv run postgres-mcp \
 
 **STDIO mode (for MCP clients like Claude Desktop):**
 ```bash
-uv run postgres-mcp \
+uv run postgres-fastmcp \
   --database-uri "postgresql://user:password@localhost:5432/dbname" \
   --transport stdio \
   --role user \
@@ -106,7 +106,7 @@ uv run postgres-mcp \
 
 **With custom tool prefix:**
 ```bash
-uv run postgres-mcp \
+uv run postgres-fastmcp \
   --database-uri "postgresql://user:password@localhost:5432/dbname" \
   --transport http \
   --name "mydb" \
@@ -172,7 +172,7 @@ Create a `config.json` file in the current directory:
 
 Then run:
 ```bash
-uv run postgres-mcp
+uv run postgres-fastmcp
 ```
 
 #### 3. Environment Variables Mode
@@ -190,7 +190,7 @@ export DATABASES__DEVELOPMENT__DATABASE_URI=postgresql://user:pass@localhost:543
 export DATABASES__DEVELOPMENT__ROLE=full
 export DATABASES__DEVELOPMENT__ACCESS_MODE=unrestricted
 
-uv run postgres-mcp
+uv run postgres-fastmcp
 ```
 
 #### 4. Mixed Configuration
@@ -252,7 +252,7 @@ HTTP transport allows running the server as a web application. This is ideal for
 
 **Single database:**
 ```bash
-uv run postgres-mcp \
+uv run postgres-fastmcp \
   --database-uri "postgresql://user:password@localhost:5432/dbname" \
   --transport http \
   --port 8000
@@ -337,7 +337,7 @@ STDIO transport is used for integration with MCP clients via standard input/outp
 
 **Single database:**
 ```bash
-uv run postgres-mcp \
+uv run postgres-fastmcp \
   --database-uri "postgresql://user:password@localhost:5432/dbname" \
   --transport stdio
 ```
@@ -377,7 +377,7 @@ The server supports multiple configuration methods with the following priority (
 All configuration can be provided via command-line arguments:
 
 ```bash
-uv run postgres-mcp \
+uv run postgres-fastmcp \
   --database-uri "postgresql://user:password@localhost:5432/dbname" \
   --transport http \
   --host 0.0.0.0 \
@@ -498,7 +498,7 @@ For stdio transport, configure Claude Desktop in `~/Library/Application Support/
     "mcpServers": {
         "postgres": {
             "command": "uv",
-            "args": ["run", "postgres-mcp", "--transport", "stdio"],
+            "args": ["run", "postgres-fastmcp", "--transport", "stdio"],
             "env": {
                 "DATABASES__DEFAULT__DATABASE_URI": "postgresql://user:pass@localhost:5432/dbname"
             }
@@ -513,7 +513,7 @@ For stdio transport, configure Claude Desktop in `~/Library/Application Support/
     "mcpServers": {
         "postgres": {
             "command": "uv",
-            "args": ["run", "postgres-mcp", "--transport", "stdio"],
+            "args": ["run", "postgres-fastmcp", "--transport", "stdio"],
             "env": {
                 "DATABASES__PRODUCTION__DATABASE_URI": "postgresql://user:pass@localhost:5432/prod",
                 "DATABASES__PRODUCTION__ROLE": "full",
@@ -587,8 +587,6 @@ When `endpoint=true`, each database gets its own HTTP endpoint. This allows diff
 - App2 tools at: `http://localhost:8000/app2/mcp`
 - Each endpoint can have different transport types
 - Tools always prefixed with server name
-
-**Note:** Currently, MCP tools do not use streaming. Streamable-HTTP transport is available for future use and protocol-level streaming support.
 
 ### Tool Prefixes
 
@@ -753,8 +751,6 @@ Endpoints:
 - Analytics: `http://localhost:8000/analytics/mcp` (streamable-http transport)
 - Main: `http://localhost:8000/main/mcp` (standard HTTP)
 
-**Note:** Currently, MCP tools do not use streaming. Streamable-HTTP transport is available for future use.
-
 ### Example 3: STDIO Mode with Multiple Databases
 
 For Claude Desktop or other stdio-based clients:
@@ -896,7 +892,7 @@ uv run mypy src/
 
 ## Differences from Original Project
 
-This fork differs from the original [postgres-mcp](https://github.com/crystaldba/postgres-mcp) with the following key changes:
+This fork differs from the original [postgres-fastmcp](https://github.com/crystaldba/postgres-fastmcp) with the following key changes:
 
 | Original Project | This Fork |
 |------------------|-----------|
@@ -941,4 +937,4 @@ MIT License
 
 ## Acknowledgments
 
-This project is a fork of [postgres-mcp](https://github.com/crystaldba/postgres-mcp) by [Crystal DBA](https://www.crystaldba.ai), rewritten to use [FastMCP](https://gofastmcp.com/).
+This project is a fork of [postgres-fastmcp](https://github.com/crystaldba/postgres-fastmcp) by [Crystal DBA](https://www.crystaldba.ai), rewritten to use [FastMCP](https://gofastmcp.com/).

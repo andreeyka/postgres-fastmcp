@@ -6,9 +6,9 @@ import pytest
 import pytest_asyncio
 from pydantic import SecretStr
 
-from postgres_mcp.config import DatabaseConfig
-from postgres_mcp.enums import AccessMode, UserRole
-from postgres_mcp.tool import ToolManager
+from postgres_fastmcp.config import DatabaseConfig
+from postgres_fastmcp.enums import AccessMode, UserRole
+from postgres_fastmcp.tool import ToolManager
 
 
 class MockCell:
@@ -46,7 +46,7 @@ async def test_tool_manager_has_explain_query():
 @pytest.mark.asyncio
 async def test_explain_query_basic():
     """Test ToolManager.explain_query with basic parameters."""
-    from postgres_mcp.explain import ExplainPlanArtifact
+    from postgres_fastmcp.explain import ExplainPlanArtifact
 
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
@@ -84,7 +84,7 @@ async def test_explain_query_basic():
 @pytest.mark.asyncio
 async def test_explain_query_analyze():
     """Test ToolManager.explain_query with analyze=True."""
-    from postgres_mcp.explain import ExplainPlanArtifact
+    from postgres_fastmcp.explain import ExplainPlanArtifact
 
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
@@ -136,7 +136,7 @@ async def test_explain_query_analyze():
 @pytest.mark.asyncio
 async def test_explain_query_hypothetical_indexes():
     """Test ToolManager.explain_query with hypothetical indexes."""
-    from postgres_mcp.explain import ExplainPlanArtifact
+    from postgres_fastmcp.explain import ExplainPlanArtifact
 
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
@@ -186,7 +186,7 @@ async def test_explain_query_hypothetical_indexes():
 @pytest.mark.asyncio
 async def test_explain_query_error_handling():
     """Test ToolManager.explain_query error handling."""
-    from postgres_mcp.common import ErrorResult
+    from postgres_fastmcp.common import ErrorResult
 
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
@@ -207,7 +207,7 @@ async def test_explain_query_error_handling():
         sql: str, *, analyze: bool = False, hypothetical_indexes: list[dict[str, Any]] | None = None
     ) -> str:
         """Mock explain_query implementation that returns error."""
-        from postgres_mcp.tool.constants import ERROR_PREFIX
+        from postgres_fastmcp.tool.constants import ERROR_PREFIX
 
         return ERROR_PREFIX + error_message
 

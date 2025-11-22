@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from postgres_mcp.enums import AccessMode, UserRole
-from postgres_mcp.sql import SafeSqlDriver, SqlDriver
+from postgres_fastmcp.enums import AccessMode, UserRole
+from postgres_fastmcp.sql import SafeSqlDriver, SqlDriver
 
 
 @pytest.mark.asyncio
@@ -16,9 +16,9 @@ async def test_force_readonly_enforcement():
     """
     from pydantic import SecretStr
 
-    from postgres_mcp.config import DatabaseConfig
-    from postgres_mcp.sql.sql_driver import DbConnPool
-    from postgres_mcp.tool import ToolManager
+    from postgres_fastmcp.config import DatabaseConfig
+    from postgres_fastmcp.sql.sql_driver import DbConnPool
+    from postgres_fastmcp.tool import ToolManager
 
     # Create mock for connection pool
     mock_conn_pool = MagicMock(spec=DbConnPool)

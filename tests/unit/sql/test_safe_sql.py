@@ -5,8 +5,8 @@ import pytest
 import pytest_asyncio
 from psycopg.sql import SQL, Literal
 
-from postgres_mcp.config import settings
-from postgres_mcp.sql import SafeSqlConfig, SafeSqlDriver, SqlDriver
+from postgres_fastmcp.config import settings
+from postgres_fastmcp.sql import SafeSqlConfig, SafeSqlDriver, SqlDriver
 
 
 @pytest_asyncio.fixture

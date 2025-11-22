@@ -1,6 +1,6 @@
 [project]
-name = "postgres-mcp"
-version = "0.0.3"
+name = "postgres-fastmcp"
+version = "0.0.4"
 description = "PostgreSQL Tuning and Analysis Tool"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -15,9 +15,10 @@ dependencies = [
     "fastmcp>=2.13.0.2",
     "pydantic-settings>=2.11.0",
     "pydantic>=2.12.4",
+    "key-value",
+    "redis>=5.0.0",
 ]
-license = "mit"
-license-files = ["LICENSE"]
+
 
 [[project.authors]]
 name = "Andrey Shlyapin"
@@ -28,12 +29,13 @@ requires = [ "hatchling",]
 build-backend = "hatchling.build"
 
 [project.scripts]
-postgres-mcp = "postgres_mcp.main:main"
+postgres-fastmcp = "postgres_fastmcp.main:main"
 
 [[tool.uv.index]]
-name = "pypi"
-url = "https://pypi.org/simple"
-default = true
+url = "https://repo.mng.sbercloud.tech/repository/pypi/simple"
+
+[[tool.uv.index]]
+url = "https://repo.mng.sbercloud.tech/repository/cpe_automation/simple"
 
 [dependency-groups]
 dev = [
@@ -50,6 +52,11 @@ plugins = "pydantic.mypy"
 python_version = "3.12"
 strict = true
 exclude = [".venv", "tests"]
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true
 
 [[tool.mypy.overrides]]
 module = [

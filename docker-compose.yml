@@ -32,7 +32,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: postgres-mcp-server
+    container_name: postgres-fastmcp-server
     environment:
       COLUMNS: "200"
     ports:

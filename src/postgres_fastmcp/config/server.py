@@ -13,7 +13,7 @@ class ServerSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="MCP_", extra="ignore")
 
-    host: str = Field(default="0.0.0.0", description="Host to bind the server to")
+    host: str = Field(default="127.0.0.1", description="Host to bind the server to")
     port: int = Field(default=8000, description="Port to bind the server to")
     transport: TransportConfig = Field(
         default=TransportConfig.HTTP, description="Global transport type: 'http' or 'stdio'"

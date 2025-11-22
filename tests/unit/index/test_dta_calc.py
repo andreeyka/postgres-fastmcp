@@ -7,14 +7,14 @@ import pytest
 import pytest_asyncio
 from pglast import parse_sql
 
-from postgres_mcp.explain import ExplainPlanArtifact
-from postgres_mcp.index.dta_calc import (
+from postgres_fastmcp.explain import ExplainPlanArtifact
+from postgres_fastmcp.index.dta_calc import (
     ColumnCollector,
     ConditionColumnCollector,
     DatabaseTuningAdvisor,
     IndexRecommendation,
 )
-from postgres_mcp.sql import DbConnPool, SqlDriver
+from postgres_fastmcp.sql import DbConnPool, SqlDriver
 
 
 logger = getLogger(__name__)

@@ -6,10 +6,10 @@ import pytest
 import pytest_asyncio
 from pydantic import SecretStr
 
-from postgres_mcp.config import DatabaseConfig
-from postgres_mcp.enums import AccessMode, UserRole
-from postgres_mcp.explain import ExplainPlanArtifact
-from postgres_mcp.tool import ToolManager
+from postgres_fastmcp.config import DatabaseConfig
+from postgres_fastmcp.enums import AccessMode, UserRole
+from postgres_fastmcp.explain import ExplainPlanArtifact
+from postgres_fastmcp.tool import ToolManager
 
 
 @pytest_asyncio.fixture
@@ -202,7 +202,7 @@ async def test_explain_query_missing_hypopg_integration():
 @pytest.mark.asyncio
 async def test_explain_query_error_handling_integration():
     """Test the ToolManager.explain_query tool's error handling."""
-    from postgres_mcp.common import ErrorResult
+    from postgres_fastmcp.common import ErrorResult
 
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
@@ -223,7 +223,7 @@ async def test_explain_query_error_handling_integration():
         sql: str, *, analyze: bool = False, hypothetical_indexes: list[dict[str, Any]] | None = None
     ) -> str:
         """Mock explain_query implementation that returns error."""
-        from postgres_mcp.tool.constants import ERROR_PREFIX
+        from postgres_fastmcp.tool.constants import ERROR_PREFIX
 
         return ERROR_PREFIX + error_message
 

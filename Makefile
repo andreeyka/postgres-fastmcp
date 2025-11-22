@@ -1,4 +1,13 @@
-.PHONY: help lint format clean commit push release-patch release-minor release-major test docker-up docker-down
+.PHONY: help lint format clean commit push release-patch release-minor release-major test docker-up docker-down docker-build docker-release docker-push
+
+ifneq (,$(wildcard .env))
+    $(foreach line,$(shell grep -E '^DOCKER_(IMAGE|TAG)=' .env 2>/dev/null),$(eval $(line)))
+endif
+
+# Docker image configuration (can be overridden via .env or command line)
+DOCKER_IMAGE ?= postgres-fastmcp
+DOCKER_TAG ?= latest
+DOCKER_FULL_IMAGE := $(DOCKER_IMAGE):$(DOCKER_TAG)
 
 help: ## Show help for available commands
 	@echo "Available commands:"
@@ -102,6 +111,23 @@ push: ## Make a commit and push (interactively prompts for message)
 	echo "✅ Commit created and pushed to remote repository!"
 
 # Docker commands
+
+docker-build: ## Build Docker image (reads DOCKER_IMAGE and DOCKER_TAG from .env)
+	@echo "🐳 Building Docker image $(DOCKER_FULL_IMAGE)..."
+	docker buildx build --platform=linux/amd64 --provenance=false --sbom=false -t $(DOCKER_FULL_IMAGE) --load -f Dockerfile .
+	@echo "✅ Docker image $(DOCKER_FULL_IMAGE) built successfully!"
+
+docker-release: ## Build and push Docker image to registry (reads from .env)
+	@echo "🚀 Building and publishing $(DOCKER_FULL_IMAGE)..."
+	docker buildx build --platform=linux/amd64 --provenance=false --sbom=false -t $(DOCKER_FULL_IMAGE) --load -f Dockerfile .
+	@echo "📤 Pushing image to registry..."
+	docker push $(DOCKER_FULL_IMAGE)
+	@echo "✅ Image published: $(DOCKER_FULL_IMAGE)"
+
+docker-push: ## Push previously built Docker image to registry (reads from .env)
+	@echo "📤 Pushing image $(DOCKER_FULL_IMAGE) to registry..."
+	docker push $(DOCKER_FULL_IMAGE)
+	@echo "✅ Image pushed: $(DOCKER_FULL_IMAGE)"
 
 docker-up: ## Start Docker test environment
 	docker-compose up -d --build

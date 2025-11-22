@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import pytest_asyncio
 
-from postgres_mcp.common import ErrorResult
-from postgres_mcp.explain import ExplainPlanArtifact, ExplainPlanTool
+from postgres_fastmcp.common import ErrorResult
+from postgres_fastmcp.explain import ExplainPlanArtifact, ExplainPlanTool
 
 
 class MockCell:
@@ -108,7 +108,7 @@ async def test_explain_with_bind_variables(mock_sql_driver, monkeypatch):
         return (True, f"PostgreSQL version 16 meets the requirement for {feature_name}")
 
     monkeypatch.setattr(
-        "postgres_mcp.explain.explain_plan.check_postgres_version_requirement",
+        "postgres_fastmcp.explain.explain_plan.check_postgres_version_requirement",
         mock_check_version,
     )
 
@@ -159,7 +159,7 @@ async def test_explain_with_bind_variables_pg15(mock_sql_driver, monkeypatch):
         return (False, f"PostgreSQL version 15 does not meet the requirement for {feature_name}")
 
     monkeypatch.setattr(
-        "postgres_mcp.explain.explain_plan.check_postgres_version_requirement",
+        "postgres_fastmcp.explain.explain_plan.check_postgres_version_requirement",
         mock_check_version,
     )
 
@@ -171,7 +171,7 @@ async def test_explain_with_bind_variables_pg15(mock_sql_driver, monkeypatch):
         async def replace_parameters(self, _query):
             return "SELECT * FROM users WHERE id = 42"  # Replaced query
 
-    monkeypatch.setattr("postgres_mcp.explain.explain_plan.SqlBindParams", MockSqlBindParams)
+    monkeypatch.setattr("postgres_fastmcp.explain.explain_plan.SqlBindParams", MockSqlBindParams)
 
     # Set up the mock to return plan data for EXPLAIN queries with replaced parameters
     async def side_effect(query, *args, **kwargs):
@@ -228,7 +228,7 @@ async def test_explain_analyze_with_bind_variables(mock_sql_driver, monkeypatch)
         return (False, f"PostgreSQL version 15 does not meet the requirement for {feature_name}")
 
     monkeypatch.setattr(
-        "postgres_mcp.explain.explain_plan.check_postgres_version_requirement",
+        "postgres_fastmcp.explain.explain_plan.check_postgres_version_requirement",
         mock_check_version,
     )
 
@@ -240,7 +240,7 @@ async def test_explain_analyze_with_bind_variables(mock_sql_driver, monkeypatch)
         async def replace_parameters(self, _query):
             return "SELECT * FROM users WHERE id = 42"  # Replaced query
 
-    monkeypatch.setattr("postgres_mcp.explain.explain_plan.SqlBindParams", MockSqlBindParams)
+    monkeypatch.setattr("postgres_fastmcp.explain.explain_plan.SqlBindParams", MockSqlBindParams)
 
     # Set up the mock to return mock plan for the modified query
     async def side_effect(query, *args, **kwargs):
@@ -378,7 +378,7 @@ async def test_explain_with_like_and_bind_variables_pg16(mock_sql_driver, monkey
         return (True, f"PostgreSQL version 16 meets the requirement for {feature_name}")
 
     monkeypatch.setattr(
-        "postgres_mcp.explain.explain_plan.check_postgres_version_requirement",
+        "postgres_fastmcp.explain.explain_plan.check_postgres_version_requirement",
         mock_check_version,
     )
 
@@ -390,7 +390,7 @@ async def test_explain_with_like_and_bind_variables_pg16(mock_sql_driver, monkey
         async def replace_parameters(self, _query):
             return "SELECT * FROM users WHERE name LIKE '%John%'"  # Replaced query
 
-    monkeypatch.setattr("postgres_mcp.explain.explain_plan.SqlBindParams", MockSqlBindParams)
+    monkeypatch.setattr("postgres_fastmcp.explain.explain_plan.SqlBindParams", MockSqlBindParams)
 
     # Set up the mock to return plan data for EXPLAIN queries with replaced parameters
     async def side_effect(query, *args, **kwargs):

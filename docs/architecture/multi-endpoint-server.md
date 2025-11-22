@@ -14,19 +14,14 @@ The architecture allows creating a single HTTP server with multiple independent 
 - Providing common endpoints (e.g., health check)
 
 **Characteristics:**
-- FastMCP server with custom tools for server management
+- FastMCP server for lifecycle management and routing
 - Has its own custom routes (e.g., `/health`)
 - Uses Starlette for HTTP routing
+- No custom tools (only health endpoint)
 
 **Endpoints:**
-- `/mcp` - main server (MCP endpoint)
+- `/mcp` - main server (MCP endpoint, used for Server Composition when `endpoint=False`)
 - `/health` - health check endpoint
-
-**Main server tools:**
-- `get_server_info` - get information about the main server and all sub-servers
-- `get_sub_server_config` - get sub-server configuration
-- `list_all_servers` - get list of all servers with their configuration
-- `calculate_stats` - calculate statistics for a list of numbers
 
 ### 2. Sub Servers
 
@@ -64,9 +59,9 @@ The architecture allows creating a single HTTP server with multiple independent 
 │ - /mcp       │   │ - /app1/mcp  │   │ - /app2/mcp  │
 │ - /health    │   │              │   │              │
 │              │   │ Tools:       │   │ Tools:       │
-│ Tools:       │   │ - list_*     │   │ - list_*     │
-│ - get_*      │   │ - execute_sql│   │ - execute_sql│
-│ - calculate_*│   │ - ...        │   │ - ...        │
+│ (no tools)   │   │ - list_*     │   │ - list_*     │
+│              │   │ - execute_sql│   │ - execute_sql│
+│              │   │ - ...        │   │ - ...        │
 └──────────────┘   └──────┬───────┘   └──────┬───────┘
                           │                  │
                           ▼                  ▼
@@ -241,43 +236,13 @@ def create_sub_server(app_name: str, config: DatabaseConfig) -> tuple[FastMCP, T
 
 ```python
 def create_main_server() -> Starlette:
-    """Create the main server with custom tools and mounted sub-servers."""
+    """Create the main server with health endpoint and mounted sub-servers."""
     main_mcp = FastMCP(name="MainServer")
     
     # Health check endpoint
     @main_mcp.custom_route("/health", methods=["GET"])
     async def health_check(_request: Request) -> JSONResponse:
         return JSONResponse({"status": "healthy", "service": "main-server"})
-    
-    # Custom tools for the main server
-    @main_mcp.tool
-    def get_server_info() -> dict[str, Any]:
-        """Get information about the main server and all sub-servers."""
-        return {
-            "server": "MainServer",
-            "status": "running",
-            "sub_servers": list(SUB_SERVERS_CONFIG.keys()),
-            "endpoints": {
-                "main": "/mcp",
-                "health": "/health",
-                **{app_name: f"/{app_name}/mcp" for app_name in SUB_SERVERS_CONFIG},
-            },
-        }
-    
-    @main_mcp.tool
-    def get_sub_server_config(app_name: str) -> dict[str, Any]:
-        """Get sub-server configuration."""
-        # ... implementation ...
-    
-    @main_mcp.tool
-    def list_all_servers() -> list[dict[str, Any]]:
-        """Get list of all servers (main + sub-servers) with their configuration."""
-        # ... implementation ...
-    
-    @main_mcp.tool
-    def calculate_stats(numbers: list[int]) -> dict[str, Any]:
-        """Calculate statistics for a list of numbers."""
-        # ... implementation ...
     
     # Create sub-servers
     tool_managers: dict[str, ToolManager] = {}
@@ -365,7 +330,7 @@ To connect to each server via an MCP client (e.g., Cursor):
 }
 ```
 
-**Note:** The main server (`main`) provides tools for managing and getting information about all servers. Sub-servers (`app1`, `app2`, `app3`, `app4`) provide tools for working with databases.
+**Note:** The main server (`main`) only provides a health check endpoint (`/health`). All database tools are provided by sub-servers (`app1`, `app2`, `app3`, `app4`). When using Server Composition (servers with `endpoint=False`), tools are available at the main endpoint with prefixes.
 
 ## Architecture Benefits
 

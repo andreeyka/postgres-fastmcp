@@ -1,4 +1,6 @@
 -- Initialize 4 databases with different access roles
+-- WARNING: This script uses TEST passwords ('password') for local development only.
+-- DO NOT use these passwords in production environments!
 
 -- Create databases
 CREATE DATABASE user_ro_db;
@@ -6,7 +8,7 @@ CREATE DATABASE user_rw_db;
 CREATE DATABASE admin_ro_db;
 CREATE DATABASE admin_rw_db;
 
--- Create users
+-- Create users with TEST passwords (for local development only)
 CREATE USER user_ro WITH PASSWORD 'password';
 CREATE USER user_rw WITH PASSWORD 'password';
 CREATE USER admin_ro WITH PASSWORD 'password';

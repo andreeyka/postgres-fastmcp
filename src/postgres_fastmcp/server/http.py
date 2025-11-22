@@ -83,6 +83,7 @@ class HttpServerBuilder(BaseServerBuilder):
         sub_apps: list[tuple[str, Starlette]] = []
 
         # Register health endpoint at root level if enabled
+        # Using Starlette Route for explicit root-level access (more reliable than FastMCP custom_route)
         if self.config.server.health_endpoint_enabled:
             auth = build_keycloak_auth(self.config, server_name=self.config.name)
             mcp_requires_auth = auth is not None

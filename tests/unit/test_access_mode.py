@@ -4,9 +4,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from postgres_mcp.enums import AccessMode, UserRole
-from postgres_mcp.sql.safe_sql import SafeSqlDriver
-from postgres_mcp.sql.sql_driver import DbConnPool, SqlDriver
+from postgres_fastmcp.enums import AccessMode, UserRole
+from postgres_fastmcp.sql.safe_sql import SafeSqlDriver
+from postgres_fastmcp.sql.sql_driver import DbConnPool, SqlDriver
 
 
 @pytest.fixture
@@ -32,8 +32,8 @@ async def test_tool_manager_returns_correct_driver(role, access_mode, expected_d
     """Test that ToolManager returns the correct driver type based on role and access_mode."""
     from pydantic import SecretStr
 
-    from postgres_mcp.config import DatabaseConfig
-    from postgres_mcp.tool import ToolManager
+    from postgres_fastmcp.config import DatabaseConfig
+    from postgres_fastmcp.tool import ToolManager
 
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
@@ -57,8 +57,8 @@ async def test_tool_manager_sets_timeout_in_restricted_mode(mock_db_connection):
     """Test that ToolManager sets the timeout in restricted mode."""
     from pydantic import SecretStr
 
-    from postgres_mcp.config import DatabaseConfig
-    from postgres_mcp.tool import ToolManager
+    from postgres_fastmcp.config import DatabaseConfig
+    from postgres_fastmcp.tool import ToolManager
 
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
@@ -79,8 +79,8 @@ async def test_tool_manager_in_unrestricted_mode_no_timeout(mock_db_connection):
     """Test that ToolManager in full+unrestricted mode is a regular SqlDriver."""
     from pydantic import SecretStr
 
-    from postgres_mcp.config import DatabaseConfig
-    from postgres_mcp.tool import ToolManager
+    from postgres_fastmcp.config import DatabaseConfig
+    from postgres_fastmcp.tool import ToolManager
 
     config = DatabaseConfig(
         database_uri=SecretStr("postgresql://user:pass@localhost/db"),
@@ -100,7 +100,7 @@ async def test_command_line_parsing():
     """Test that command-line arguments correctly set the access mode."""
     import sys
 
-    from postgres_mcp.main import main
+    from postgres_fastmcp.main import main
 
     # Mock sys.argv and asyncio.run
     original_argv = sys.argv
@@ -109,7 +109,7 @@ async def test_command_line_parsing():
     try:
         # Test with --database-uri (new way to specify database)
         sys.argv = [
-            "postgres_mcp",
+            "postgres_fastmcp",
             "--database-uri",
             "postgresql://user:password@localhost/db",
             "--transport",
@@ -121,8 +121,8 @@ async def test_command_line_parsing():
         # Mock the server run functions as regular MagicMock (not AsyncMock)
         # since asyncio.run is mocked and won't actually await them
         with (
-            patch("postgres_mcp.main.run_stdio", MagicMock()),
-            patch("postgres_mcp.main.run_http", MagicMock()),
+            patch("postgres_fastmcp.main.run_stdio", MagicMock()),
+            patch("postgres_fastmcp.main.run_http", MagicMock()),
         ):
             # Run main (partially mocked to avoid actual connection)
             # Click raises SystemExit(0) on success, which we need to catch

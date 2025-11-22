@@ -7,12 +7,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import SecretStr
 
-from postgres_mcp.config import get_settings
-from postgres_mcp.enums import TransportConfig
-from postgres_mcp.models import DatabaseConfig
-from postgres_mcp.server.base import BaseServerBuilder
-from postgres_mcp.server.http import HttpServerBuilder
-from postgres_mcp.server.stdio import StdioServerBuilder
+from postgres_fastmcp.config import get_settings
+from postgres_fastmcp.enums import TransportConfig
+from postgres_fastmcp.config import DatabaseConfig
+from postgres_fastmcp.server.base import BaseServerBuilder
+from postgres_fastmcp.server.http import HttpServerBuilder
+from postgres_fastmcp.server.stdio import StdioServerBuilder
 
 
 class TestToolRegistrationSingleServer:
@@ -21,7 +21,7 @@ class TestToolRegistrationSingleServer:
     def test_single_server_stdio_no_prefix(self):
         """Test that single server in stdio mode registers tools without prefix."""
         settings = get_settings(
-            transport="stdio",
+            server={"transport": "stdio"},
             databases={"db1": DatabaseConfig(database_uri=SecretStr("postgresql://test1"))},
         )
 
@@ -45,7 +45,7 @@ class TestToolRegistrationSingleServer:
     def test_single_server_http_no_prefix(self):
         """Test that single server in HTTP mode registers tools without prefix."""
         settings = get_settings(
-            transport="http",
+            server={"transport": "http"},
             databases={"db1": DatabaseConfig(database_uri=SecretStr("postgresql://test1"))},
         )
 
@@ -70,7 +70,7 @@ class TestToolRegistrationSingleServer:
         """Test that single server via CLI registers tools without prefix."""
         # Simulate CLI mode: single server with --database-uri
         settings = get_settings(
-            transport="stdio",
+            server={"transport": "stdio"},
             databases={"default": DatabaseConfig(database_uri=SecretStr("postgresql://test"))},
         )
 
@@ -94,7 +94,7 @@ class TestToolRegistrationSingleServer:
         """Test that single server via config.json registers tools without prefix."""
         # Simulate config.json with single server
         settings = get_settings(
-            transport="http",
+            server={"transport": "http"},
             databases={"app1": DatabaseConfig(database_uri=SecretStr("postgresql://test"))},
         )
 
@@ -121,7 +121,7 @@ class TestToolRegistrationMultipleServers:
     def test_multiple_servers_stdio_with_prefixes(self):
         """Test that multiple servers in stdio mode register tools with prefixes."""
         settings = get_settings(
-            transport="stdio",
+            server={"transport": "stdio"},
             databases={
                 "db1": DatabaseConfig(database_uri=SecretStr("postgresql://test1")),
                 "db2": DatabaseConfig(database_uri=SecretStr("postgresql://test2")),
@@ -158,7 +158,7 @@ class TestToolRegistrationMultipleServers:
     def test_multiple_servers_http_with_prefixes(self):
         """Test that multiple servers in HTTP mode register tools with prefixes."""
         settings = get_settings(
-            transport="http",
+            server={"transport": "http"},
             databases={
                 "db1": DatabaseConfig(database_uri=SecretStr("postgresql://test1")),
                 "db2": DatabaseConfig(database_uri=SecretStr("postgresql://test2")),
@@ -194,7 +194,7 @@ class TestToolRegistrationMultipleServers:
     def test_three_servers_stdio_with_prefixes(self):
         """Test that three servers in stdio mode register tools with prefixes."""
         settings = get_settings(
-            transport="stdio",
+            server={"transport": "stdio"},
             databases={
                 "db1": DatabaseConfig(database_uri=SecretStr("postgresql://test1")),
                 "db2": DatabaseConfig(database_uri=SecretStr("postgresql://test2")),
@@ -239,14 +239,14 @@ class TestToolRegistrationConsistency:
         )
 
         # Test stdio
-        stdio_settings = get_settings(transport="stdio", databases=settings.databases)
+        stdio_settings = get_settings(server={"transport": "stdio"}, databases=settings.databases)
         stdio_builder = StdioServerBuilder(stdio_settings)
         mock_tools_stdio = MagicMock()
         stdio_builder.lifespan_manager.get_tools = MagicMock(return_value=mock_tools_stdio)
         stdio_builder.register_tool_mode_servers(TransportConfig.STDIO)
 
         # Test HTTP
-        http_settings = get_settings(transport="http", databases=settings.databases)
+        http_settings = get_settings(server={"transport": "http"}, databases=settings.databases)
         http_builder = HttpServerBuilder(http_settings)
         mock_tools_http = MagicMock()
         http_builder.lifespan_manager.get_tools = MagicMock(return_value=mock_tools_http)
@@ -264,7 +264,7 @@ class TestToolRegistrationConsistency:
         }
 
         # Test stdio
-        stdio_settings = get_settings(transport="stdio", databases=databases)
+        stdio_settings = get_settings(server={"transport": "stdio"}, databases=databases)
         stdio_builder = StdioServerBuilder(stdio_settings)
         mock_tools1_stdio = MagicMock()
         mock_tools2_stdio = MagicMock()
@@ -272,7 +272,7 @@ class TestToolRegistrationConsistency:
         stdio_builder.register_tool_mode_servers(TransportConfig.STDIO)
 
         # Test HTTP
-        http_settings = get_settings(transport="http", databases=databases)
+        http_settings = get_settings(server={"transport": "http"}, databases=databases)
         http_builder = HttpServerBuilder(http_settings)
         mock_tools1_http = MagicMock()
         mock_tools2_http = MagicMock()
@@ -292,7 +292,7 @@ class TestStdioEndpointWarning:
     def test_stdio_warns_when_endpoint_true(self):
         """Test that stdio mode warns when servers have endpoint=True."""
         settings = get_settings(
-            transport="stdio",
+            server={"transport": "stdio"},
             databases={
                 "db1": DatabaseConfig(database_uri=SecretStr("postgresql://test1"), endpoint=True),
                 "db2": DatabaseConfig(database_uri=SecretStr("postgresql://test2"), endpoint=False),
@@ -305,7 +305,7 @@ class TestStdioEndpointWarning:
         builder.lifespan_manager.get_tools = MagicMock(return_value=mock_tools)
 
         # Register tools and check for warning
-        with patch("postgres_mcp.server.base.logger") as mock_logger:
+        with patch("postgres_fastmcp.server.base.logger") as mock_logger:
             mounted = builder.register_tool_mode_servers(TransportConfig.STDIO)
 
             # Verify: all servers should be registered (endpoint is ignored)
@@ -326,7 +326,7 @@ class TestStdioEndpointWarning:
     def test_stdio_no_warning_when_endpoint_false(self):
         """Test that stdio mode doesn't warn when all servers have endpoint=False."""
         settings = get_settings(
-            transport="stdio",
+            server={"transport": "stdio"},
             databases={
                 "db1": DatabaseConfig(database_uri=SecretStr("postgresql://test1"), endpoint=False),
                 "db2": DatabaseConfig(database_uri=SecretStr("postgresql://test2"), endpoint=False),
@@ -339,7 +339,7 @@ class TestStdioEndpointWarning:
         builder.lifespan_manager.get_tools = MagicMock(return_value=mock_tools)
 
         # Register tools and check for no warning
-        with patch("postgres_mcp.server.base.logger") as mock_logger:
+        with patch("postgres_fastmcp.server.base.logger") as mock_logger:
             mounted = builder.register_tool_mode_servers(TransportConfig.STDIO)
 
             # Verify: all servers should be registered
@@ -351,7 +351,7 @@ class TestStdioEndpointWarning:
     def test_http_filters_endpoint_true_servers(self):
         """Test that HTTP mode filters out servers with endpoint=True."""
         settings = get_settings(
-            transport="http",
+            server={"transport": "http"},
             databases={
                 "db1": DatabaseConfig(database_uri=SecretStr("postgresql://test1"), endpoint=True),
                 "db2": DatabaseConfig(database_uri=SecretStr("postgresql://test2"), endpoint=False),
